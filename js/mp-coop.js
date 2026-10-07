@@ -298,11 +298,22 @@ Coop.prototype.onEndMsg = function(msg){
 };
 
 window.Coop = Coop;
+// Selbst-Diagnose: jeder JS-Fehler landet lesbar in der Co-op-Box
+window.addEventListener('error', function(e){
+  try{
+    const el = document.getElementById('coopStatus');
+    if(el) el.textContent = 'JS-FEHLER: ' + (e.message || e.error) + ' @' + String(e.filename || '').split('/').pop() + ':' + (e.lineno || '?');
+  }catch(_){}
+});
 document.addEventListener('DOMContentLoaded', function(){
   try{
     if(typeof game !== 'undefined' && game && !game.coopUi){
       game.coopUi = new Coop(game);
       game.coopUi.wireUi();
+      game.coopUi.uiStatus('Bereit v4 — klicke Host Lobby.');
+    } else {
+      const el = document.getElementById('coopStatus');
+      if(el) el.textContent = 'FEHLER: Spiel-Objekt fehlt (game.js defekt?). Solo-Modus testen.';
     }
   }catch(e){ console.error('coop init', e); }
 });
