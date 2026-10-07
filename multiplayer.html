@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>EMBERDEEP Multiplayer — Invite-Code Lobby</title>
+<link rel="stylesheet" href="style.css?v=6"/>
+<style>
+.mp-wrap{max-width:980px;margin:0 auto;padding:24px 16px 60px}
+.mp-card{background:rgba(7,9,18,.9);border:1px solid rgba(245,179,73,.35);border-radius:10px;padding:18px;margin:14px 0}
+.mp-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.mp-row input{background:#0b101d;color:#efe8d2;border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:10px 12px;font-size:15px;min-width:200px}
+.mp-code{font:700 28px 'Courier New',monospace;letter-spacing:6px;color:#f5b349}
+.btn{cursor:pointer;background:#f5b349;color:#111;border:none;border-radius:6px;padding:10px 16px;font-weight:700}
+.btn.ghost{background:transparent;color:#f5b349;border:1px solid rgba(245,179,73,.5)}
+.btn:disabled{opacity:.4;cursor:default}
+#mpPlayers{list-style:none;margin:10px 0;padding:0}
+#mpPlayers li{padding:6px 0;border-bottom:1px solid rgba(255,255,255,.08)}
+#mpStatus{opacity:.85;font-size:14px;min-height:20px}
+#mpCanvas{width:100%;height:520px;background:#04050c;border:1px solid rgba(255,255,255,.15);border-radius:8px;display:block}
+a.back{color:#8b90a8}
+</style>
+</head>
+<body>
+<div class="mp-wrap">
+  <a class="back" href="index.html">← zurück zu EMBERDEEP Solo</a>
+  <h1>EMBERDEEP <span style="color:#f5b349">MULTIPLAYER</span></h1>
+  <p>Co-op Arena für 2–8 Spieler. Keine Portfreigabe, kein VPN nötig. Läuft auf GitHub Pages via PeerJS + WebRTC.</p>
+
+  <div class="mp-card">
+    <div class="mp-row">
+      <input id="mpName" maxlength="16" placeholder="Dein Name" value="Wickkeeper"/>
+      <button id="btnCreate" class="btn">Lobby erstellen</button>
+      <input id="mpJoinCode" maxlength="6" placeholder="CODE" style="max-width:120px;text-transform:uppercase"/>
+      <button id="btnJoin" class="btn ghost">Per Code joinen</button>
+    </div>
+    <div class="mp-row" style="margin-top:12px">
+      <span>Invite-Code:</span><span id="mpCode" class="mp-code">– – –</span>
+      <button id="btnCopy" class="btn ghost" disabled>Invite-Link kopieren</button>
+      <button id="btnStart" class="btn" disabled>Start (nur Host)</button>
+    </div>
+    <div id="mpStatus">Bereit.</div>
+    <ul id="mpPlayers"></ul>
+  </div>
+
+  <div class="mp-card">
+    <canvas id="mpCanvas" width="960" height="520"></canvas>
+    <p style="opacity:.7">WASD bewegen · Maus zielen · Klick = Flamme · bleib im Licht, sammle Ember ◆, überlebe mit deinem Team.</p>
+  </div>
+</div>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="js/mp-net.js?v=1"></script>
+<script src="js/mp-game.js?v=1"></script>
+</body>
+</html>
