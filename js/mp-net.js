@@ -61,6 +61,9 @@ MPNet.prototype._openHost = function(code){
   this.status('Erstelle Lobby ' + code + ' …');
   var peer = new Peer(MP_PREFIX + code, { debug: 0 });
   this.peer = peer;
+  setTimeout(function(){
+    if(!self.myId) self.status('PeerServer antwortet nicht (0.peerjs.com). Adblock/VPN/Firewall pruefen, Seite neu laden, nochmal versuchen.');
+  }, 12000);
   peer.on('open', function(id){
     self.myId = id;
     self.code = code;
@@ -71,13 +74,14 @@ MPNet.prototype._openHost = function(code){
   });
   peer.on('connection', function(c){ self._onHostConn(c); });
   peer.on('error', function(err){
+    var detail = (err && (err.type || err.message)) || err;
     if(err && err.type === 'unavailable-id'){
       // Code belegt -> neuen wuerfeln
       self.code = mpMakeCode();
       try{ peer.destroy(); }catch(e){}
       self._openHost(self.code);
     } else {
-      self.status('Netzfehler (Host): ' + ((err&&err.type)||err));
+      self.status('Netzfehler (Host): ' + detail);
     }
   });
 };
@@ -151,6 +155,9 @@ MPNet.prototype.join = function(code, name){
   this.status('Verbinde zu ' + code + ' …');
   var peer = new Peer({ debug: 0 });
   this.peer = peer;
+  setTimeout(function(){
+    if(!self.conn || !self.conn.open) self.status('Keine Verbindung zu Lobby ' + code + '. Code pruefen, Host muss online sein (gleiche Seite, Lobby offen).');
+  }, 12000);
   peer.on('open', function(id){
     self.myId = id;
     var c = peer.connect(MP_PREFIX + code, { reliable: true });
