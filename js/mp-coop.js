@@ -98,10 +98,12 @@ Coop.prototype.wireUi = function(){
   const self = this;
   const $ = function(id){ return document.getElementById(id); };
   $('btnCoopHost').addEventListener('click', function(){
+    if(typeof Peer === 'undefined'){ self.uiStatus('FEHLER: PeerJS-CDN blockiert (Adblock/VPN?). unpkg.com freigeben und neu laden.'); return; }
     self.isHost = true;
     self.ensureNet().host(self.myName());
   });
   $('btnCoopJoin').addEventListener('click', function(){
+    if(typeof Peer === 'undefined'){ self.uiStatus('FEHLER: PeerJS-CDN blockiert (Adblock/VPN?). unpkg.com freigeben und neu laden.'); return; }
     const c = ($('coopCode').value || '').trim();
     if(c.length !== 6){ self.uiStatus('Code muss 6 Zeichen haben.'); return; }
     self.isHost = false;
