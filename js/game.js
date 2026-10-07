@@ -9,6 +9,8 @@ class Game {
     this.best = 0;
     try{ this.best = parseInt(localStorage.getItem('emberdeep_best') || '0', 10) || 0; }catch(e){}
     this.state = 'title';
+    this.coop = null;
+    this.runSeed = (Date.now() >>> 0);
     this.floor = 0;
     this.world = null;
     this.P = null;
@@ -52,8 +54,8 @@ class Game {
     };
   }
 
-  lightMult(){
-    const P = this.P;
+  lightMult(pl){
+    const P = pl || this.P;
     if(!P) return 1;
     const frac = clamp(P.oil / P.maxOil, 0, 1);
     return (0.25 + 0.75 * Math.pow(frac, 0.5)) * (P.snuffT > 0 ? 0.45 : 1);
@@ -188,6 +190,8 @@ class Game {
     this.score = 0;
     this.embers = 0;
     this.upgLevels = {};
+    if(this.coop && this.coop.isHost && this.coop.runSeed) this.runSeed = this.coop.runSeed >>> 0;
+    else if(!this.coop) this.runSeed = (Date.now() >>> 0);
     this.nextFloor();
     this.state = 'playing';
     this.showScreen(null);
@@ -225,9 +229,183 @@ class Game {
     return P;
   }
 
+  // ---- CO-OP ----
+  coopMates(){
+    if(!this.coop || !this.coop.mates) return [];
+    const out = [];
+    this.coop.mates.forEach(function(m){ out.push(m); });
+    return out;
+  }
+  allPlayers(){
+    const ps = this.P ? [this.P] : [];
+    const mates = this.coopMates();
+    for(let i = 0; i < mates.length; i++) ps.push(mates[i]);
+    return ps;
+  }
+  nearestPlayer(x, y){
+    const ps = this.allPlayers();
+    let best = null, bd = Infinity;
+    for(let i = 0; i < ps.length; i++){
+      const p = ps[i];
+      if(!p || p.hp <= 0 || p.dead) continue;
+      const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
+      if(d < bd){ bd = d; best = p; }
+    }
+    return best || this.P;
+  }
+  mateDown(m){
+    m.hp = 0; m.alive = false; m.respawnT = 5; m.flameOn = false;
+    this.burst(m.x, m.y, '#ff4d6d', 1.4, 18, 5, 0.8);
+    this.effect(m.x, m.y, '#ff4d6d', 90);
+    if(this.coop) this.coop.say((m.name || 'Keeper') + ' is down — respawn in 5s');
+  }
+  updateMate(m, dt){
+    const W = this.world;
+    const inp = (this.coop && this.coop.inputs[m.id]) || {};
+    if(m.flameCd > 0) m.flameCd -= dt;
+    if(m.flashT > 0) m.flashT -= dt;
+    if(m.alive === false){
+      m.respawnT -= dt;
+      if(m.respawnT <= 0 && W){
+        m.alive = true; m.hp = m.maxHp; m.oil = Math.max(m.oil, m.maxOil * 0.5);
+        m.x = W.spawn.x; m.y = W.spawn.y;
+      }
+      return;
+    }
+    let dx = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
+    let dy = (inp.down ? 1 : 0) - (inp.up ? 1 : 0);
+    if(dx && dy){ dx *= 0.7071; dy *= 0.7071; }
+    if(typeof inp.ang === 'number') m.aim = inp.ang;
+    if(dx || dy) m.walk = (m.walk || 0) + dt * 16;
+    if(m.dashT > 0){
+      m.x += m.dashDir.x * m.dash.speed * dt;
+      m.y += m.dashDir.y * m.dash.speed * dt;
+    } else if(dx || dy){
+      m.x += dx * m.speed * dt;
+      m.y += dy * m.speed * dt;
+    }
+    m.x = clamp(m.x, 18, W.w - 18);
+    m.y = clamp(m.y, 18, W.h - 18);
+    for(let i = 0; i < W.obstacles.length; i++){
+      const hit = resolveCircleRect(m.x, m.y, 13, W.obstacles[i]);
+      if(hit){ m.x += hit.dx; m.y += hit.dy; }
+    }
+    m.surgeT = Math.max(0, (m.surgeT || 0) - dt);
+    m.surgeCdT = Math.max(0, (m.surgeCdT || 0) - dt);
+    m.dashT = Math.max(0, (m.dashT || 0) - dt);
+    m.dashCdT = Math.max(0, (m.dashCdT || 0) - dt);
+    m.invulnT = Math.max(0, (m.invulnT || 0) - dt);
+    m.snuffT = Math.max(0, (m.snuffT || 0) - dt);
+    if(inp.surge && m.surgeCdT <= 0 && m.oil > 0 && !m._surgeHeld){
+      m.surgeCdT = m.surge.cd; m.surgeT = 0.6;
+      m.oil = Math.max(0, m.oil - 5);
+      this.burst(m.x, m.y, '#ffd98a', 1.5, 24, 6, 0.9);
+      for(let i = 0; i < this.enemies.length; i++){
+        const e = this.enemies[i];
+        if(e.dead) continue;
+        const d = dist(m.x, m.y, e.x, e.y);
+        if(d < m.surge.r + e.r){
+          e.hp -= m.surge.dmg; e.flash = 0.3;
+          const ddx = e.x - m.x, ddy = e.y - m.y, dd = Math.hypot(ddx, ddy) || 1;
+          e.kb.x += (ddx / dd) * m.surge.kb; e.kb.y += (ddy / dd) * m.surge.kb;
+          if(e.hp <= 0) this.killEnemy(e, m);
+        }
+      }
+      for(let i = 0; i < this.shots.length; i++){
+        const s = this.shots[i];
+        if((s.kind === 'orb' || s.kind === 'shard') && dist(m.x, m.y, s.x, s.y) < m.surge.r) s.dead = true;
+      }
+    }
+    m._surgeHeld = !!inp.surge;
+    if(inp.dash && m.dashCdT <= 0 && !m._dashHeld){
+      m.dashCdT = m.dash.cd; m.dashT = m.dash.dur;
+      m.invulnT = Math.max(m.invulnT, m.dash.dur);
+      m.dashDir = { x: dx || Math.cos(m.aim), y: dy || Math.sin(m.aim) };
+      const mdl = Math.hypot(m.dashDir.x, m.dashDir.y) || 1;
+      m.dashDir.x /= mdl; m.dashDir.y /= mdl;
+    }
+    m._dashHeld = !!inp.dash;
+    m.oil = Math.max(0, m.oil - CFG.drain * dt);
+    m.flameOn = !!inp.fire && m.oil > 0;
+    if(m.flameOn){
+      m.oil = Math.max(0, m.oil - m.flame.cost * dt);
+      const dmg = m.flame.dps * dt;
+      for(let i = 0; i < this.enemies.length; i++){
+        const e = this.enemies[i];
+        if(e.dead) continue;
+        const ex = e.x - m.x, ey = e.y - m.y;
+        const d = Math.hypot(ex, ey);
+        if(d > m.flame.range + e.r) continue;
+        const ea = Math.atan2(ey, ex);
+        if(Math.abs(angleDiff(ea, m.aim)) > m.flame.half + e.r / (d || 1)) continue;
+        e.hp -= dmg;
+        e.flash = Math.max(e.flash, 0.2);
+        e.kb.x += ex / (d || 1) * m.flame.kb * dt;
+        e.kb.y += ey / (d || 1) * m.flame.kb * dt;
+        if(e.hp <= 0) this.killEnemy(e, m);
+      }
+    }
+    if(m.oil <= 0){
+      m.oil = 0;
+      m.hp -= CFG.darkDps * dt;
+      if(m.hp <= 0){ this.mateDown(m); return; }
+    }
+    for(let i = 0; i < W.pickups.length; i++){
+      const pk = W.pickups[i];
+      if(pk.taken) continue;
+      if(dist(m.x, m.y, pk.x, pk.y) < 26){
+        pk.taken = true;
+        if(pk.type === 'ember') this.embers += pk.val * (m.greed || 1);
+        else if(pk.type === 'oil') m.oil = Math.min(m.maxOil, m.oil + pk.val);
+        else m.hp = Math.min(m.maxHp, m.hp + pk.val);
+        this.burst(pk.x, pk.y, '#ffd98a', 0.7, 8, 3, 0.5);
+      }
+    }
+    if(W.gateOpen && dist(m.x, m.y, W.gate.x, W.gate.y) < 55) this.stepGate();
+  }
+  updateMates(dt){
+    const mates = this.coopMates();
+    for(let i = 0; i < mates.length; i++){
+      if(this.state !== 'playing') return;
+      this.updateMate(mates[i], dt);
+    }
+    if(this.coop) this.coop.tick(dt);
+  }
+  updateGuest(dt){
+    this.t += dt;
+    this.shake = Math.max(0, this.shake - 14 * dt);
+    this.hurtT = Math.max(0, this.hurtT - dt);
+    const P = this.P;
+    if(P && this.world){
+      const follow = this.R.reducedMotion ? 1 : 1 - Math.exp(-12 * dt);
+      this.cam.x = lerp(this.cam.x, P.x, follow);
+      this.cam.y = lerp(this.cam.y, P.y, follow);
+      const origin = this.cameraOrigin();
+      P.aim = Math.atan2(this.mouse.y + origin.y - P.y, this.mouse.x + origin.x - P.x);
+    }
+    for(let i = 0; i < this.particles.length; i++){
+      const p = this.particles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= Math.exp(-3 * dt); p.vy *= Math.exp(-3 * dt);
+      p.life -= dt;
+    }
+    this.particles = this.particles.filter(function(p){ return p.life > 0; });
+    this.effects.forEach(function(e){ e.life -= dt; });
+    this.effects = this.effects.filter(function(e){ return e.life > 0; });
+    if(this.coop) this.coop.tick(dt);
+  }
+  applyUpgrade(u){
+    this.upgLevels[u.id] = (this.upgLevels[u.id] || 0) + 1;
+    u.apply(this.P);
+    const mates = this.coopMates();
+    for(let i = 0; i < mates.length; i++){
+      try{ u.apply(mates[i]); }catch(e){}
+    }
+    this.toast(u.name.toUpperCase());
+  }
   nextFloor(){
     this.floor++;
-    this.rng = new Rng((Date.now() ^ (this.floor * 7919)) >>> 0);
+    this.rng = new Rng(((this.runSeed || 0) + this.floor * 7919) >>> 0);
     this.world = generateFloor(this.floor, this.rng);
     const W = this.world;
     this.enemies = [];
@@ -264,6 +442,7 @@ class Game {
     this.showScreen(null);
     SFX.floor();
     this.toast('FLOOR ' + W.num);
+    if(this.coop && this.coop.isHost) this.coop.onFloor();
   }
 
   boss(){
@@ -300,8 +479,9 @@ class Game {
     }
   }
 
-  snuffPlayer(amount, oilDrain, src){
-    const P = this.P;
+  snuffPlayer(amount, oilDrain, src, target){
+    const P = target || this.P;
+    if(!P || P.hp <= 0) return;
     P.snuffT = Math.max(P.snuffT || 0, amount);
     P.oil = Math.max(0, P.oil - oilDrain);
     SFX.snuff();
@@ -309,16 +489,19 @@ class Game {
     this.shake += 2;
   }
 
-  killEnemy(e){
+  killEnemy(e, killer){
     if(e.dead) return;
     e.dead = true;
-    const mult = this.P.greed || 1;
+    const K = killer || this.P;
+    const mult = (K && K.greed) || 1;
     this.score += e.d.pts;
     this.embers += Math.round(e.d.ember * mult);
     this.world.pickups.push({ type: 'oil', x: e.x, y: e.y, val: e.isBoss ? 60 : 14, t: this.t });
-    const P = this.P;
-    P.hp = Math.min(P.maxHp, P.hp + (P.lifesteal || 0));
-    P.oil = Math.min(P.maxOil, P.oil + (P.oilOnKill || 0));
+    const P = K || this.P;
+    if(P){
+      P.hp = Math.min(P.maxHp, P.hp + (P.lifesteal || 0));
+      P.oil = Math.min(P.maxOil, P.oil + (P.oilOnKill || 0));
+    }
     SFX.kill();
     this.burst(e.x, e.y, '#ff8a3d', e.isBoss ? 2 : 1, e.isBoss ? 34 : 14, e.isBoss ? 8 : 4, 0.8);
     this.effect(e.x, e.y, e.d.eye, e.isBoss ? 150 : 42);
@@ -338,8 +521,9 @@ class Game {
     }
   }
 
-  damagePlayer(amount, src){
-    const P = this.P;
+  damagePlayer(amount, src, target){
+    const P = target || this.P;
+    if(!P || P.hp <= 0) return;
     if(P.hp <= 0 || P.invulnT > 0 || P.dashT > 0) return;
     if(P.ward > 0 && Math.random() < P.ward){
       this.burst(P.x, P.y, '#ffd98a', 1, 8, 4, 0.4);
@@ -361,10 +545,11 @@ class Game {
     this.burst(P.x, P.y, '#ff4d6d', 1, 10, 4, 0.5);
     if(P.thorns > 0 && src && !src.dead && src.hp !== undefined){
       src.hp -= P.thorns;
-      if(src.hp <= 0) this.killEnemy(src);
+      if(src.hp <= 0) this.killEnemy(src, P);
     }
     if(P.hp <= 0){
       P.hp = 0;
+      if(P !== this.P && this.coop){ this.mateDown(P); return; }
       this.gameOver();
     }
   }
@@ -395,6 +580,7 @@ class Game {
       s.appendChild(nb);
     }
     this.showScreen('screen-over');
+    if(this.coop && this.coop.isHost) this.coop.onEnd('over');
   }
 
   victory(){
@@ -418,6 +604,7 @@ class Game {
       s.appendChild(d);
     }
     this.showScreen('screen-victory');
+    if(this.coop && this.coop.isHost) this.coop.onEnd('victory');
   }
 
   toTitle(){
@@ -451,6 +638,7 @@ class Game {
     const wrap = document.getElementById('upgradeCards');
     wrap.innerHTML = '';
     if(!picks.length){ this.nextFloor(); return; }
+    if(this.coop && this.coop.isHost) this.coop.onUpgradeOpen(picks.map(function(u){ return u.id; }));
     for(let i = 0; i < picks.length; i++){
       (function(u){
         const card = document.createElement('button');
@@ -486,9 +674,8 @@ class Game {
         card.addEventListener('click', function(){
           if(game.state !== 'upgrade') return;
           SFX.upgrade();
-          game.upgLevels[u.id] = (game.upgLevels[u.id] || 0) + 1;
-          u.apply(game.P);
-          game.toast(u.name.toUpperCase());
+          game.applyUpgrade(u);
+          if(game.coop && game.coop.isHost) game.coop.onUpgradePick(u.id);
           game.nextFloor();
         });
         wrap.appendChild(card);
@@ -609,6 +796,7 @@ class Game {
     if(this.state !== 'playing') return;
     this.t += dt;
     const W = this.world, P = this.P;
+    if(this.coop && !this.coop.isHost){ this.updateGuest(dt); return; }
     if(!W || !P || P.hp <= 0) return;
 
     this.shake = Math.max(0, this.shake - 14 * dt);
@@ -673,7 +861,7 @@ class Game {
           const dd = Math.hypot(dx, dy) || 1;
           e.kb.x += (dx / dd) * P.surge.kb;
           e.kb.y += (dy / dd) * P.surge.kb;
-          if(e.hp <= 0) this.killEnemy(e);
+          if(e.hp <= 0) this.killEnemy(e, P);
         }
       }
       for(let i = 0; i < this.shots.length; i++){
@@ -737,7 +925,7 @@ class Game {
           SFX.hitE();
           this.burst(e.x, e.y, '#ffd98a', 0.8, 6, 3, 0.4);
         }
-        if(e.hp <= 0) this.killEnemy(e);
+        if(e.hp <= 0) this.killEnemy(e, P);
       }
     }
 
@@ -758,6 +946,7 @@ class Game {
         if(this.state !== 'playing') return;
       }
     }
+    if(this.coop && this.coop.isHost) this.updateMates(dt);
     this.enemies = this.enemies.filter(function(e){ return !e.dead; });
 
     W.spawnT -= dt;
@@ -767,28 +956,36 @@ class Game {
       this.spawnEnemy(pickMobType(this.floor, this.rng), spot.x, spot.y);
     }
     if(!W.gateOpen && W.spawnsLeft === 0 && this.enemies.length === 0) this.stepGate();
-    if(W.gateOpen && dist(P.x, P.y, W.gate.x, W.gate.y) < 55){
-      this.stepGate(); return;
+    if(W.gateOpen){
+      const ps = this.allPlayers();
+      for(let gi = 0; gi < ps.length; gi++){
+        const gp = ps[gi];
+        if(gp.hp > 0 && dist(gp.x, gp.y, W.gate.x, W.gate.y) < 55){ this.stepGate(); return; }
+      }
     }
 
     for(let i = 0; i < W.pickups.length; i++){
       const pk = W.pickups[i];
       if(pk.taken) continue;
-      if(dist(P.x, P.y, pk.x, pk.y) < 26){
+      const ps = this.allPlayers();
+      for(let pi = 0; pi < ps.length; pi++){
+        const taker = ps[pi];
+        if(taker.hp <= 0 || dist(taker.x, taker.y, pk.x, pk.y) >= 26) continue;
         pk.taken = true;
         if(pk.type === 'ember'){
-          this.embers += pk.val * P.greed;
+          this.embers += pk.val * (taker.greed || 1);
           SFX.pick();
         } else if(pk.type === 'oil'){
-          P.oil = Math.min(P.maxOil, P.oil + pk.val);
+          taker.oil = Math.min(taker.maxOil, taker.oil + pk.val);
           SFX.oilPick();
         } else {
-          P.hp = Math.min(P.maxHp, P.hp + pk.val);
+          taker.hp = Math.min(taker.maxHp, taker.hp + pk.val);
           SFX.wickPick();
         }
         this.burst(pk.x, pk.y, '#ffd98a', 0.7, 8, 3, 0.5);
         this.effect(pk.x, pk.y, pk.type === 'wick' ? '#98d9bc' : '#eec480', 25);
         if(pk.type !== 'ember') this.floatText(pk.x, pk.y, '+' + pk.val + (pk.type === 'oil' ? ' OIL' : ' VIGOR'), pk.type === 'wick' ? '#98d9bc' : '#eec480');
+        break;
       }
     }
 
@@ -801,15 +998,17 @@ class Game {
       s.y += s.vy * dt;
       s.life -= dt;
       s.dead = inAnyObstacle(W.obstacles, s.x, s.y, s.r) || s.life <= 0 || s.x < 0 || s.x > W.w || s.y < 0 || s.y > W.h;
-      if(!s.dead && s.kind === 'orb' && dist(s.x, s.y, P.x, P.y) < s.r + 13){
-        this.damagePlayer(s.dmg, null);
-        s.dead = true;
-        if(this.state !== 'playing') return;
-      }
-      if(!s.dead && s.kind === 'shard' && dist(s.x, s.y, P.x, P.y) < s.r + 13){
-        this.damagePlayer(s.dmg, null);
-        s.dead = true;
-        if(this.state !== 'playing') return;
+      if(!s.dead && (s.kind === 'orb' || s.kind === 'shard')){
+        const ps = this.allPlayers();
+        for(let qi = 0; qi < ps.length; qi++){
+          const qp = ps[qi];
+          if(qp.hp > 0 && dist(s.x, s.y, qp.x, qp.y) < s.r + 13){
+            this.damagePlayer(s.dmg, null, qp);
+            s.dead = true;
+            break;
+          }
+        }
+        if(s.dead && this.state !== 'playing') return;
       }
     }
     this.shots = this.shots.filter(function(s){ return !s.dead; });

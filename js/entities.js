@@ -51,7 +51,7 @@ class Enemy {
   }
 
   bossAI(dt, G){
-    const P = G.P;
+    const P = G.nearestPlayer(this.x, this.y) || G.P;
     const isWarden = this.d.boss === 'warden';
     this.patT -= dt;
     const dx = P.x - this.x, dy = P.y - this.y;
@@ -105,7 +105,7 @@ class Enemy {
         break;
       case 'snuffT':
         if(this.patT <= 0){
-          G.snuffPlayer(isWarden ? 5 : 4, isWarden ? 16 : 10, this);
+          G.snuffPlayer(isWarden ? 5 : 4, isWarden ? 16 : 10, this, P);
           this.pat = 'drift';
           this.patT = 2.2;
         }
@@ -122,7 +122,8 @@ class Enemy {
 
   update(dt, G){
     if(this.dead) return;
-    const P = G.P;
+    const P = G.nearestPlayer(this.x, this.y) || G.P;
+    if(!P) return;
     this.flash = Math.max(0, this.flash - dt);
     const k = Math.exp(-5 * dt);
     this.kb.x *= k; this.kb.y *= k;
@@ -152,15 +153,15 @@ class Enemy {
     this.constrain(G);
     d = dist(P.x, P.y, this.x, this.y);
 
-    const lightR = P.lightR * G.lightMult();
+    const lightR = P.lightR * G.lightMult(P);
     if(P.oil > 0 && d < lightR + this.r * 0.5){
       this.hp -= P.burn * dt;
       this.flash = Math.max(this.flash, 0.25);
-      if(this.hp <= 0){ G.killEnemy(this); return; }
+      if(this.hp <= 0){ G.killEnemy(this, P); return; }
     }
 
     if(d < this.r + 15){
-      G.damagePlayer(this.dmg, this);
+      G.damagePlayer(this.dmg, this, P);
     }
   }
 }

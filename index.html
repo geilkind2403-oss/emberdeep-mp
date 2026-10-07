@@ -6,6 +6,7 @@
 <title>EMBERDEEP — A Descent in the Dark</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='9' fill='%23ffb347'/%3E%3Ccircle cx='16' cy='16' r='14' fill='none' stroke='%23ffb347' stroke-opacity='.4'/%3E%3C/svg%3E"/>
 <link rel="stylesheet" href="style.css?v=6"/>
+<link rel="stylesheet" href="coop.css?v=1"/>
 </head>
 <body>
 <div id="game">
@@ -58,6 +59,26 @@
         <p class="lore">The beacons have gone silent.<br/>You are the last Wickkeeper.<br/>Carry the flame where the sun cannot follow.</p>
         <button id="btnStart" class="btn big start-btn"><span class="button-sigil">◈</span> LIGHT THE WAY <span class="button-arrow">↗</span></button>
         <p class="tip">The light is your weapon. The oil is your time.</p>
+        <div id="coopBox" class="coop-box">
+          <div class="coop-title">CO-OP DESCENT · 2–8 KEEPERS</div>
+          <div class="coop-row">
+            <input id="coopName" maxlength="16" placeholder="Name" value="Wickkeeper"/>
+          </div>
+          <div class="coop-row">
+            <button id="btnCoopHost" class="btn small">Host Lobby</button>
+            <input id="coopCode" maxlength="6" placeholder="CODE" class="coop-code"/>
+            <button id="btnCoopJoin" class="btn small ghost">Join</button>
+          </div>
+          <div class="coop-row">
+            <span id="coopInvite" class="coop-invite">No lobby yet.</span>
+            <button id="btnCoopCopy" class="btn small ghost" disabled>Copy invite</button>
+          </div>
+          <ul id="coopPlayers" class="coop-players"></ul>
+          <div class="coop-row">
+            <button id="btnCoopStart" class="btn small" disabled>Start co-op (host)</button>
+          </div>
+          <div id="coopStatus" class="coop-status">Same dungeon, same floors, shared run. No port forwarding needed.</div>
+        </div>
         <div id="bestLine" class="best"></div>
       </div>
       <div class="relic-caption" aria-hidden="true"><span>RELIC NO. 001</span><strong>The Last Light</strong><i>“Even the abyss remembers fire.”</i></div>
@@ -112,5 +133,8 @@
 <script src="js/entities.js?v=6"></script>
 <script src="js/render.js?v=6"></script>
 <script src="js/game.js?v=6"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="js/mp-net.js?v=1"></script>
+<script src="js/mp-coop.js?v=1"></script>
 </body>
 </html>

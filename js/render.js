@@ -201,6 +201,14 @@ class Renderer {
     lc.globalCompositeOperation='destination-out';
     const flick=this.reducedMotion?1:1+.025*Math.sin(t*13)+.012*Math.sin(t*29);
     this.punchHole(lc,P.x-ox,P.y-oy,lightR*1.45*flick);
+    if(G.coopMates) G.coopMates().forEach(function(m){
+      if(m.hp<=0 && m.alive===false) return;
+      const mr=Math.max(12,(m.lightR||150)*(G.lightMult?G.lightMult(m):1));
+      lc.globalCompositeOperation='destination-out';
+      this.punchHole(lc,m.x-ox,m.y-oy,mr*1.45*flick);
+      if(m.flameOn) this.punchHole(lc,m.x+Math.cos(m.aim)*100-ox,m.y+Math.sin(m.aim)*100-oy,(m.flame?m.flame.range:175)*.85);
+      lc.globalCompositeOperation='source-over';
+    }, this);
     W.vents.forEach(v=>this.punchHole(lc,v.x-ox,v.y-oy,v.active&&v.fuel>0?125:48));
     W.pickups.forEach(p=>this.punchHole(lc,p.x-ox,p.y-oy,p.type==='ember'?35:57));
     this.punchHole(lc,W.gate.x-ox,W.gate.y-oy,W.gateOpen?160:65);
@@ -211,7 +219,7 @@ class Renderer {
     c.globalCompositeOperation='lighter';this.glowCircle(c,P.x,P.y,lightR*1.4,'#d59648',P.oil>0?.15:.025);c.globalCompositeOperation='source-over';
     this.drawGate(c,G,t);this.drawVents(c,G,t);this.drawPickups(c,G,t);
     this.drawTrails(c,G);this.drawEnemies(c,G,t);this.drawFlameCone(c,P,t);this.drawSurge(c,P);
-    this.drawPlayer(c,G,t);this.drawShots(c,G);this.drawParticles(c,G);this.drawEffects(c,G);
+    this.drawPlayer(c,G,t);this.drawMates(c,G,t);this.drawShots(c,G);this.drawParticles(c,G);this.drawEffects(c,G);
     c.restore();this.drawAtmosphere(c,this.reducedMotion?0:t,ox,oy,false);this.drawReticle(G,ox,oy);this.drawDamage(c,G);this.drawGateGuide(c,G,ox,oy);
     this.syncHud(G,P,W);
   }
@@ -264,7 +272,8 @@ class Renderer {
   drawEnemies(c,G,t){
     G.enemies.forEach(e=>{
       if(e.dead||!this.visible(e.x,e.y))return;
-      const tt=this.reducedMotion?0:t,ang=Math.atan2(G.P.y-e.y,G.P.x-e.x),r=e.r,color=e.d.eye;
+      const NP=G.nearestPlayer? (G.nearestPlayer(e.x,e.y)||G.P) : G.P;
+      const tt=this.reducedMotion?0:t,ang=Math.atan2(NP.y-e.y,NP.x-e.x),r=e.r,color=e.d.eye;
       c.save();c.translate(e.x,e.y);c.fillStyle='#0000007a';c.beginPath();c.ellipse(0,r*.65,r*1.1,r*.45,0,0,TAU);c.fill();
       this.glowCircle(c,0,0,r*2.2,color,e.isBoss?.18:.11);
       if(e.isBoss){
@@ -319,6 +328,28 @@ class Renderer {
     const P=G.P;c.save();if(P.invulnT>0)c.globalAlpha=this.reducedMotion?.75:.8+.2*Math.sin(t*18);
     this.keeper(c,P.x,P.y,P.aim,P.walk||0,this.reducedMotion?0:t,false,P.oil>0);c.restore();
     if(P.oil>0){c.save();c.globalCompositeOperation='lighter';this.glowCircle(c,P.x+Math.cos(P.aim)*14,P.y+Math.sin(P.aim)*14,16,'#ffcf80',.25);c.restore();}
+  }
+  drawMates(c,G,t){
+    if(!G.coopMates) return;
+    const self=this;
+    G.coopMates().forEach(function(m){
+      if(m.alive===false){
+        c.save();c.fillStyle='rgba(255,255,255,.45)';c.font='12px sans-serif';c.textAlign='center';
+        c.fillText((m.name||'Keeper')+' … '+Math.ceil(m.respawnT||0)+'s',m.x,m.y-24);c.restore();
+        return;
+      }
+      self.drawFlameCone(c,m,t);self.drawSurge(c,m);
+      c.save();if(m.invulnT>0)c.globalAlpha=self.reducedMotion?.75:.8+.2*Math.sin(t*18);
+      self.keeper(c,m.x,m.y,m.aim,m.walk||0,self.reducedMotion?0:t,false,(m.oil||0)>0);c.restore();
+      c.save();c.globalCompositeOperation='lighter';
+      self.glowCircle(c,m.x,m.y,Math.max(12,(m.lightR||150))*1.4,'#d59648',(m.oil||0)>0?.15:.025);
+      c.globalCompositeOperation='source-over';
+      c.fillStyle=m.color||'#8fd0ff';c.font='12px sans-serif';c.textAlign='center';
+      c.fillText(m.name||'Keeper',m.x,m.y-26);
+      c.fillStyle='rgba(0,0,0,.5)';c.fillRect(m.x-16,m.y+18,32,4);
+      c.fillStyle='#7dff9a';c.fillRect(m.x-16,m.y+18,32*clamp((m.hp||1)/(m.maxHp||100),0,1),4);
+      c.restore();
+    });
   }
   drawTrails(c,G){
     if(this.reducedMotion)return;c.save();
