@@ -1042,10 +1042,18 @@ class Game {
 
 let game = null;
 window.addEventListener('DOMContentLoaded', function(){
+  try{
   const canvas = document.getElementById('view');
   game = new Game(canvas, new Renderer(canvas));
   game.updateBestLine();
   game.showScreen('screen-title');
   game.last = performance.now() / 1000;
   game.run();
+  }catch(err){
+    try{
+      const el = document.getElementById('coopStatus');
+      if(el) el.textContent = 'GAME-INIT-FEHLER: ' + ((err && err.message) || err);
+    }catch(_){}
+    throw err;
+  }
 });
