@@ -3,10 +3,10 @@
    No own server, no port forwarding, no VPN.
    The host's peer id is MP_PREFIX + 6-char invite code; guests connect to it.
    Transport messages (game messages live in mp-coop.js):
-   guest->host: {t:'hello', name, v}   {t:'bye'}   {t:'ping'}
-   host->guest: {t:'lobby', players:[{id,name,color}], code}   {t:'bye', reason}   {t:'ping'} */
+   guest->host: {t:'hello', name, cls, v}   {t:'cls', cls}   {t:'bye'}   {t:'ping'}
+   host->guest: {t:'lobby', players:[{id,name,color,cls}], code}   {t:'bye', reason}   {t:'ping'} */
 
-var MP_PROTOCOL = 3;
+var MP_PROTOCOL = 4;
 var MP_PREFIX = 'emberdeep-mp-v' + MP_PROTOCOL + '-';
 var MP_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 var MP_MAX_PLAYERS = 8;
@@ -66,7 +66,8 @@ function MPNet(events){
   this.code = null;
   this.myId = null;
   this.myName = 'Wickkeeper';
-  this.players = [];  // [{id,name,color}], host first
+  this.myCls = 'keeper';
+  this.players = [];  // [{id,name,color,cls}], host first
   this.timer = null;
 }
 MPNet.prototype.emit = function(name){
@@ -113,10 +114,11 @@ MPNet.prototype._heartbeat = function(){
 };
 
 // ---------- Host ----------
-MPNet.prototype.host = function(name){
+MPNet.prototype.host = function(name, cls){
   this.leave();
   this.isHost = true;
   this.myName = mpCleanName(name, 'Host');
+  this.myCls = cls || 'keeper';
   this._openHost(mpMakeCode());
 };
 MPNet.prototype._openHost = function(code){
@@ -131,7 +133,7 @@ MPNet.prototype._openHost = function(code){
   peer.on('open', function(id){
     if(self.peer !== peer) return;
     self.myId = id;
-    self.players = [{ id: id, name: self.myName, color: MP_COLORS[0] }];
+    self.players = [{ id: id, name: self.myName, color: MP_COLORS[0], cls: self.myCls }];
     self._startHeartbeat();
     self.broadcastLobby();
   });
@@ -158,6 +160,7 @@ MPNet.prototype._onHostConn = function(c){
     if(!msg || !msg.t) return;
     self.lastSeen[c.peer] = Date.now();
     if(msg.t === 'hello') self._onHello(c, msg);
+    else if(msg.t === 'cls') self._setPlayerClass(c.peer, msg.cls);
     else if(msg.t === 'bye'){ if(self.conns[c.peer] === c) self._dropPeer(c.peer); }
     else if(msg.t !== 'ping' && self.conns[c.peer] === c) self.emit('message', msg, c.peer);
   });
@@ -169,9 +172,21 @@ MPNet.prototype._onHello = function(c, msg){
   var known = this.players.some(function(p){ return p.id === c.peer; });
   if(!known && this.players.length >= MP_MAX_PLAYERS){ this._reject(c, 'Lobby voll (' + MP_MAX_PLAYERS + ').'); return; }
   this.conns[c.peer] = c;
-  if(!known) this.players.push({ id: c.peer, name: mpCleanName(msg.name, 'Gast'), color: this._freeColor() });
+  if(!known) this.players.push({ id: c.peer, name: mpCleanName(msg.name, 'Gast'), color: this._freeColor(), cls: msg.cls || 'keeper' });
   this.broadcastLobby();
   if(!known) this.emit('peerJoined', c.peer);
+};
+MPNet.prototype._setPlayerClass = function(id, cls){
+  const p = this.players.find(function(q){ return q.id === id; });
+  if(!p || p.cls === cls) return;
+  p.cls = cls;
+  this.broadcastLobby();
+};
+// Picking a class in the lobby; it applies from the next run on.
+MPNet.prototype.setClass = function(cls){
+  this.myCls = cls;
+  if(this.isHost){ if(this.myId) this._setPlayerClass(this.myId, cls); }
+  else this.send({ t: 'cls', cls: cls });
 };
 MPNet.prototype._reject = function(c, reason){
   try{ c.send({ t: 'bye', reason: reason }); }catch(e){}
@@ -207,13 +222,14 @@ MPNet.prototype.sendTo = function(id, msg){
 };
 
 // ---------- Guest ----------
-MPNet.prototype.join = function(code, name){
+MPNet.prototype.join = function(code, name, cls){
   var self = this;
   code = mpNormCode(code);
   if(code.length !== 6){ this.status('Code muss 6 Zeichen haben.'); return; }
   this.leave();
   this.isHost = false;
   this.myName = mpCleanName(name, 'Gast');
+  this.myCls = cls || 'keeper';
   this.code = code;
   this.status('Verbinde zu ' + code + ' …');
   var peer = new Peer({ debug: 0 });
@@ -230,7 +246,7 @@ MPNet.prototype.join = function(code, name){
       if(self.conn !== c) return;
       self.lastHostMsg = Date.now();
       self.status('Verbunden — warte auf den Host.');
-      c.send({ t: 'hello', name: self.myName, v: MP_PROTOCOL });
+      c.send({ t: 'hello', name: self.myName, cls: self.myCls, v: MP_PROTOCOL });
       self._startHeartbeat();
     });
     c.on('data', function(msg){ if(self.conn === c) self._onGuestData(msg); });

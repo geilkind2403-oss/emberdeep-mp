@@ -18,10 +18,13 @@ class Game {
     this.P = null;
     this.enemies = [];
     this.shots = [];
+    this.zones = []; // flare beacons and other lingering class effects
     this.particles = [];
     this.effects = [];
     this.trails = [];
     this.hurtT = 0;
+    this.cls = 'keeper';
+    try{ const c = localStorage.getItem('emberdeep_class'); if(CLASSES[c]) this.cls = c; }catch(e){}
     this._trailClock = 0;
     this._flameOn = false;
     this.cam = { x: 0, y: 0 };
@@ -106,7 +109,7 @@ class Game {
 
   initInput(){
     const kmap = {};
-    ['KeyW','KeyA','KeyS','KeyD','Space','ShiftLeft','ShiftRight','KeyP','Escape'].forEach(function(code){ kmap[code] = true; });
+    ['KeyW','KeyA','KeyS','KeyD','KeyE','Space','ShiftLeft','ShiftRight','KeyP','Escape'].forEach(function(code){ kmap[code] = true; });
     window.addEventListener('keydown', (e) => {
       if(!kmap[e.code] || e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
@@ -150,6 +153,9 @@ class Game {
     $('btnResume').addEventListener('click', function(){ SFX.click(); game.resume(); });
     $('btnPauseRestart').addEventListener('click', function(){ SFX.click(); game.startRun(); });
     $('btnPauseTitle').addEventListener('click', function(){ SFX.click(); game.toTitle(); });
+    $('btnClass').addEventListener('click', function(){ SFX.click(); game.showClassPicker(); });
+    $('btnClassBack').addEventListener('click', function(){ SFX.click(); game.showScreen('screen-title'); });
+    this.updateClassButton();
     $('btnMotion').addEventListener('click', function(){
       game.R.reducedMotion = !game.R.reducedMotion;
       game.R.applyMotion();
@@ -161,7 +167,7 @@ class Game {
 
   showScreen(name){
     document.body.classList.toggle('in-game', name === null);
-    const ids = ['screen-title','screen-upgrade','screen-over','screen-victory','screen-pause'];
+    const ids = ['screen-title','screen-class','screen-upgrade','screen-over','screen-victory','screen-pause'];
     for(let i = 0; i < ids.length; i++){
       document.getElementById(ids[i]).classList.toggle('hidden', ids[i] !== name);
     }
@@ -176,6 +182,45 @@ class Game {
     }
   }
 
+  // ---- Keeper classes ----
+  showClassPicker(){
+    const game = this, wrap = document.getElementById('classCards');
+    wrap.innerHTML = '';
+    CLASS_IDS.forEach(function(id, i){
+      const C = CLASSES[id], card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'card class-card' + (id === game.cls ? ' chosen' : '');
+      const icon = document.createElement('div');
+      icon.className = 'boon-icon'; icon.textContent = C.icon; icon.setAttribute('aria-hidden', 'true');
+      const number = document.createElement('span');
+      number.className = 'boon-index'; number.textContent = '0' + (i + 1);
+      const h3 = document.createElement('h3'); h3.textContent = C.name;
+      const flav = document.createElement('div'); flav.className = 'flav'; flav.textContent = C.role;
+      const ab = document.createElement('div'); ab.className = 'desc';
+      ab.textContent = 'E · ' + C.ability.name + ' — ' + C.ability.desc + ' (' + C.ability.cd + 's)';
+      const pas = document.createElement('div'); pas.className = 'desc class-passive'; pas.textContent = C.passive;
+      [icon, number, h3, flav, ab, pas].forEach(function(el){ card.appendChild(el); });
+      card.addEventListener('click', function(){
+        SFX.click();
+        game.setClass(id);
+        game.showScreen('screen-title');
+      });
+      wrap.appendChild(card);
+    });
+    this.showScreen('screen-class');
+  }
+  setClass(id){
+    if(!CLASSES[id]) return;
+    this.cls = id;
+    try{ localStorage.setItem('emberdeep_class', id); }catch(e){}
+    this.updateClassButton();
+    if(this.lobby) this.lobby.onClassChanged(id);
+  }
+  updateClassButton(){
+    const C = CLASSES[this.cls];
+    document.getElementById('btnClass').textContent = C.icon + '  ' + C.name + ' · E ' + C.ability.name + ' — CHANGE';
+  }
+
   startRun(){
     if(this.isGuest()) return; // the host drives co-op runs
     this.stopInput(); this.P = null; this.t = 0; this.shake = 0;
@@ -186,7 +231,7 @@ class Game {
     this.nextFloor();
   }
 
-  makePlayer(){
+  makePlayer(cls){
     const W = this.world;
     const base = {
       x: W.spawn.x, y: W.spawn.y,
@@ -219,6 +264,15 @@ class Game {
     P.alive = true;
     P.upg = {};   // boon levels
     P.buffs = {}; // power-up kind -> seconds left
+    const C = CLASSES[cls] || CLASSES.keeper;
+    P.cls = CLASSES[cls] ? cls : 'keeper';
+    P.hp = P.maxHp = C.hp;
+    P.speed *= C.speed;
+    P.lightR += C.light;
+    P.flame.dps *= C.flameDps;
+    P.flame.range += C.flameRange;
+    P.dash.cd = Math.max(0.6, P.dash.cd + C.dashCd);
+    P.eCdT = 0;
     return P;
   }
 
@@ -255,13 +309,19 @@ class Game {
   checkTeamWipe(){
     if(this.state === 'playing' && !this.allPlayers().some(function(k){ return k.alive !== false; })) this.gameOver();
   }
-  // A slain boss brings fallen keepers back next to `at` — fresh, without their boons.
+  // A slain boss brings fallen keepers back next to `at` with full vigor and oil;
+  // the fall costs them two random boon levels.
   reviveFallen(at){
     const fallen = this.allPlayers().filter(function(p){ return p.alive === false; });
     fallen.forEach((p, i) => {
-      const fresh = this.makePlayer();
+      const levels = [], lost = [];
+      for(const id in p.upg) for(let n = 0; n < p.upg[id]; n++) levels.push(id);
+      for(let n = 0; n < 2 && levels.length; n++) lost.push(levels.splice((Math.random() * levels.length) | 0, 1)[0]);
+      const fresh = this.makePlayer(p.cls);
       ['id', 'name', 'color', 'tp'].forEach(function(k){ fresh[k] = p[k]; });
       Object.assign(p, fresh);
+      levels.forEach(id => this.applyUpgrade(UPGRADES.find(function(u){ return u.id === id; }), p, true));
+      p.hp = p.maxHp; p.oil = p.maxOil;
       p.walk = 0; p.snuffT = 0; p.invulnT = 2;
       const a = i / fallen.length * TAU;
       p.x = at.x + Math.cos(a) * 45; p.y = at.y + Math.sin(a) * 45;
@@ -269,11 +329,10 @@ class Game {
       p.tp++;
       this.burst(p.x, p.y, '#ffd98a', 1.4, 20, 5, 0.9);
       this.effect(p.x, p.y, '#ffd98a', 110);
+      const names = lost.map(function(id){ return UPGRADES.find(function(u){ return u.id === id; }).name.toUpperCase(); });
+      this.coop.say((p.name || 'Keeper') + ' returns' + (names.length ? ' · lost ' + names.join(' & ') : ''));
     });
-    if(fallen.length){
-      this.coop.say('THE FALLEN RETURN');
-      this.coop.onStatsChanged();
-    }
+    if(fallen.length) this.coop.onStatsChanged();
   }
   // Fallen keepers watch a living teammate.
   focusKeeper(){
@@ -335,11 +394,11 @@ class Game {
     this.fuelStatus = this.fuelPrompt(P);
     this.updateFx(dt);
   }
-  applyUpgrade(u, p){
+  applyUpgrade(u, p, quiet){
     p = p || this.P;
     p.upg[u.id] = (p.upg[u.id] || 0) + 1;
     u.apply(p);
-    if(p === this.P) this.toast(u.name.toUpperCase());
+    if(p === this.P && !quiet) this.toast(u.name.toUpperCase());
   }
   nextFloor(){
     const guest = this.isGuest();
@@ -349,10 +408,11 @@ class Game {
     const W = this.world;
     this.enemies = [];
     this.shots = [];
+    this.zones = [];
     this.particles = [];
     this.effects = []; this.trails = []; this.hurtT = 0;
     this._trailClock = 0;
-    this.P = this.P || this.makePlayer();
+    this.P = this.P || this.makePlayer(this.cls);
     if(this.coop && !guest) this.coop.syncMates();
     const keepers = this.allPlayers();
     keepers.forEach((p, i) => {
@@ -360,6 +420,7 @@ class Game {
       p.surgeT = p.surgeCdT = p.dashT = p.dashCdT = p.invulnT = 0;
       p.snuffT = 0;
       p.walk = 0;
+      p.eCdT = 0;
       p.buffs = {};
       if(p.alive !== false) p.oil = Math.min(p.maxOil, p.oil + 30);
     });
@@ -382,10 +443,10 @@ class Game {
     if(this.coop && !guest) this.coop.onFloor();
   }
   spawnFloorEnemies(){
-    const W = this.world, P = this.P;
+    const W = this.world, P = this.P, keepers = this.allPlayers();
     for(let i = 0; i < W.initial; i++){
-      const s = placeMobSpot(W, new Rng(this.floor * 7919 + i), P.x, P.y);
-      this.spawnEnemy(pickMobType(this.floor, new Rng(this.floor * 31 + i)), s.x, s.y);
+      const s = spreadSpot(W, this.rng, keepers, this.enemies, 380, Infinity);
+      this.spawnEnemy(pickMobType(this.floor, this.rng), s.x, s.y);
     }
     if(W.boss){
       const spot = freeSpot(W.w, W.h, W.obstacles, this.rng, 400, P.x, P.y, ENEMY_DEFS[W.boss].r + 5);
@@ -776,7 +837,10 @@ class Game {
       aim: Math.atan2(this.mouse.y + origin.y - P.y, this.mouse.x + origin.x - P.x),
       fire: !!this.mouse.down,
       surge: !!k.Space,
-      dash: !!(k.ShiftLeft || k.ShiftRight)
+      dash: !!(k.ShiftLeft || k.ShiftRight),
+      ability: !!k.KeyE,
+      tx: this.mouse.x + origin.x,
+      ty: this.mouse.y + origin.y
     };
   }
   decayFeedback(dt){
@@ -842,6 +906,8 @@ class Game {
       if(p.buffs[k] <= 0) delete p.buffs[k];
     }
     const freeOil = p.buffs.well > 0;
+    p.eCdT = Math.max(0, (p.eCdT || 0) - dt);
+    if(inp.ability && p.eCdT <= 0) this.useAbility(p, inp);
     if(inp.surge && p.surgeCdT <= 0 && p.oil > 0) this.surge(p);
 
     if(!freeOil) p.oil = Math.max(0, p.oil - CFG.drain * dt);
@@ -873,16 +939,18 @@ class Game {
     this.burst(p.x, p.y, '#ffd98a', 1.5, 24, 6, 0.9);
     this.blast(p, p.surge.r, p.surge.dmg, p.surge.kb);
   }
-  // Damages and shoves every enemy in range and snuffs enemy shots.
-  blast(p, r, dmg, kb){
+  // Damages and shoves every enemy within `r` of `at` (default: the keeper `p`,
+  // who also gets the kill) and snuffs enemy shots there.
+  blast(p, r, dmg, kb, at){
+    at = at || p;
     for(let i = 0; i < this.enemies.length; i++){
       const e = this.enemies[i];
       if(e.dead) continue;
-      const d = dist(p.x, p.y, e.x, e.y);
+      const d = dist(at.x, at.y, e.x, e.y);
       if(d < r + e.r){
         e.hp -= dmg;
         e.flash = 0.3;
-        const dx = e.x - p.x, dy = e.y - p.y;
+        const dx = e.x - at.x, dy = e.y - at.y;
         const dd = Math.hypot(dx, dy) || 1;
         e.kb.x += (dx / dd) * kb;
         e.kb.y += (dy / dd) * kb;
@@ -892,8 +960,79 @@ class Game {
     for(let i = 0; i < this.shots.length; i++){
       const s = this.shots[i];
       if(s.kind !== 'orb' && s.kind !== 'shard') continue;
-      if(dist(p.x, p.y, s.x, s.y) < r) s.dead = true;
+      if(dist(at.x, at.y, s.x, s.y) < r) s.dead = true;
     }
+  }
+  // Class ability on E. Runs on the host like every other source of damage.
+  useAbility(p, inp){
+    const ab = CLASSES[p.cls].ability, free = p.buffs.well > 0;
+    if(ab.cost && !free && p.oil < ab.cost) return;
+    const tx = inp.tx !== undefined ? inp.tx : p.x + Math.cos(p.aim) * 200;
+    const ty = inp.ty !== undefined ? inp.ty : p.y + Math.sin(p.aim) * 200;
+    const ang = Math.atan2(ty - p.y, tx - p.x), far = dist(p.x, p.y, tx, ty);
+    p.eCdT = ab.cd;
+    if(ab.cost && !free) p.oil -= ab.cost;
+    if(ab.id === 'flare'){
+      const d = Math.min(far, 320);
+      const z = { kind: 'flare', x: p.x + Math.cos(ang) * d, y: p.y + Math.sin(ang) * d, r: 170, t: 6, max: 6, owner: p };
+      this.zones.push(z);
+      this.abilityFx(z.x, z.y, '#ffb35c', 170);
+    } else if(ab.id === 'fireball'){
+      const sp = 560;
+      this.shots.push({ x: p.x + Math.cos(ang) * 18, y: p.y + Math.sin(ang) * 18, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+        r: 8, dmg: 55 + 9 * this.floor, life: Math.max(60, Math.min(far, 620)) / sp, color: '#ff7a2f', kind: 'fire', owner: p, dead: false });
+    } else if(ab.id === 'bulwark'){
+      this.allPlayers().forEach(function(k){
+        if(k.alive !== false && dist(k.x, k.y, p.x, p.y) < 170) k.buffs.aegis = Math.max(k.buffs.aegis || 0, 3);
+      });
+      this.blast(p, 170, 10, 760);
+      this.abilityFx(p.x, p.y, POWERUPS.aegis.color, 170);
+    } else if(ab.id === 'blink'){
+      const d = Math.min(far, 280), dmg = 35 + 6 * this.floor;
+      this.blast(p, 80, dmg, 300);
+      this.abilityFx(p.x, p.y, '#b18cff', 80);
+      p.x += Math.cos(ang) * d; p.y += Math.sin(ang) * d;
+      this.constrainKeeper(p);
+      p.tp++; // co-op guests snap to the new spot
+      p.invulnT = Math.max(p.invulnT, 0.35);
+      this.blast(p, 90, dmg, 360);
+      this.abilityFx(p.x, p.y, '#b18cff', 90);
+    } else if(ab.id === 'mend'){
+      this.allPlayers().forEach(k => {
+        if(k.alive === false || dist(k.x, k.y, p.x, p.y) > 230) return;
+        k.hp = Math.min(k.maxHp, k.hp + 35);
+        k.oil = Math.min(k.maxOil, k.oil + 20);
+        this.floatText(k.x, k.y, '+35 VIGOR', '#98d9bc');
+      });
+      this.abilityFx(p.x, p.y, '#98d9bc', 230);
+    }
+    if(p === this.P) SFX.ability();
+  }
+  // Ring + sparks; co-op guests get the same through the host.
+  abilityFx(x, y, color, r){
+    this.effect(x, y, color, r);
+    this.burst(x, y, color, 1.2, 18, 4, 0.7);
+    if(this.coop && this.coop.isHost) this.coop.broadcastFx(x, y, color, r);
+  }
+  explodeFireball(s){
+    this.blast(s.owner, 105, s.dmg, 420, s);
+    this.abilityFx(s.x, s.y, s.color, 105);
+    SFX.noiseHit({ f: 300, f2: 70, d: 0.35, v: 0.22, ft: 'lowpass' });
+  }
+  // Flare beacons burn every shadow inside them.
+  updateZones(dt){
+    for(let i = 0; i < this.zones.length; i++){
+      const z = this.zones[i];
+      z.t -= dt;
+      for(let j = 0; j < this.enemies.length; j++){
+        const e = this.enemies[j];
+        if(e.dead || dist(z.x, z.y, e.x, e.y) > z.r + e.r) continue;
+        e.hp -= (24 + 3 * this.floor) * dt;
+        e.flash = Math.max(e.flash, 0.15);
+        if(e.hp <= 0) this.killEnemy(e, z.owner);
+      }
+    }
+    this.zones = this.zones.filter(function(z){ return z.t > 0; });
   }
   grantPower(p, kind){
     const def = POWERUPS[kind];
@@ -973,13 +1112,14 @@ class Game {
         if(this.state !== 'playing') return;
       }
     }
+    this.updateZones(dt);
     this.enemies = this.enemies.filter(function(e){ return !e.dead; });
 
     W.spawnT -= dt;
     if(W.spawnT <= 0 && W.spawnsLeft > 0){
       W.spawnT = W.spawnInterval; W.spawnsLeft--;
-      const near = this.focusKeeper();
-      const spot = placeMobSpot(W, this.rng, near.x, near.y);
+      const living = this.allPlayers().filter(function(k){ return k.alive !== false; });
+      const spot = spreadSpot(W, this.rng, living.length ? living : [P], this.enemies, 420, 1200);
       this.spawnEnemy(pickMobType(this.floor, this.rng), spot.x, spot.y);
     }
     if(!W.gateOpen && W.spawnsLeft === 0 && this.enemies.length === 0) this.stepGate();
@@ -1031,6 +1171,14 @@ class Game {
       s.y += s.vy * dt;
       s.life -= dt;
       s.dead = inAnyObstacle(W.obstacles, s.x, s.y, s.r) || s.life <= 0 || s.x < 0 || s.x > W.w || s.y < 0 || s.y > W.h;
+      if(s.kind === 'fire'){
+        for(let ei = 0; ei < this.enemies.length && !s.dead; ei++){
+          const e = this.enemies[ei];
+          if(!e.dead && dist(s.x, s.y, e.x, e.y) < s.r + e.r) s.dead = true;
+        }
+        if(s.dead) this.explodeFireball(s);
+        continue;
+      }
       if(!s.dead && (s.kind === 'orb' || s.kind === 'shard')){
         for(let qi = 0; qi < keepers.length; qi++){
           const qp = keepers[qi];

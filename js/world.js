@@ -31,6 +31,22 @@ function freeSpot(w, h, obstacles, rng, minSpawnDist, sx, sy, pad = 34){
   throw new Error('No free floor space');
 }
 
+// Set dressing: every floor leans on its own themed props; lit props glow in the dark.
+const FLOOR_PROPS = [
+  ['puddle', 'chain', 'bones'],    // The Drowned Gallery
+  ['candles', 'urn', 'rug'],       // The Candle Warrens
+  ['crystal', 'crate', 'urn'],     // Gilt Silt
+  ['bones', 'roots', 'bones'],     // Hall of Small Teeth
+  ['statue', 'candles', 'rug'],    // The Withheld Choir
+  ['puddle', 'chain', 'crate'],    // Brine Vaults
+  ['shrooms', 'roots', 'bones'],   // The Hushing
+  ['urn', 'candles', 'bones'],     // Reliquary of Ash
+  ['statue', 'bones', 'shrooms'],  // The Long Grief
+  ['statue', 'candles', 'crystal'] // The Warden's Rest
+];
+const PROP_KINDS = ['bones', 'urn', 'crate', 'rug', 'puddle', 'chain', 'statue', 'roots', 'candles', 'crystal', 'shrooms'];
+const LIT_PROPS = { candles: { color: '#ffb35c', r: 70 }, crystal: { color: '#7fd8ff', r: 78 }, shrooms: { color: '#9cf3a8', r: 62 } };
+
 function generateFloor(num, rng){
   const w = Math.min(2300, 1500 + num * 45);
   const h = Math.min(1500, 950 + num * 30);
@@ -133,6 +149,25 @@ function generateFloor(num, rng){
     });
   }
 
+  const theme = FLOOR_PROPS[(num - 1) % FLOOR_PROPS.length];
+  const props = [];
+  const nProps = Math.round(w * h / 36000);
+  for(let i = 0; i < nProps; i++){
+    const kind = rng.chance(0.55) ? rng.pick(theme) : rng.pick(PROP_KINDS);
+    const pad = kind === 'rug' ? 70 : kind === 'statue' ? 44 : 26;
+    const s = freeSpot(w, h, obstacles, rng, 110, spawn.x, spawn.y, pad);
+    props.push({ kind: kind, x: s.x, y: s.y, a: rng.range(0, TAU), s: rng.range(0.85, 1.25), seed: rng.range(0, 99) });
+  }
+  // Enough little lights that the dark always has something to find.
+  const litKinds = Object.keys(LIT_PROPS);
+  const themeLit = theme.filter(function(k){ return LIT_PROPS[k]; });
+  for(let lit = props.filter(function(p){ return LIT_PROPS[p.kind]; }).length; lit < 7; lit++){
+    const s = freeSpot(w, h, obstacles, rng, 110, spawn.x, spawn.y, 26);
+    props.push({ kind: rng.pick(themeLit.length ? themeLit : litKinds), x: s.x, y: s.y, a: rng.range(0, TAU), s: rng.range(0.85, 1.2), seed: rng.range(0, 99) });
+  }
+  // Flat props first so everything else is drawn on top of them.
+  props.sort(function(a, b){ return (a.kind === 'rug' || a.kind === 'puddle' ? 0 : 1) - (b.kind === 'rug' || b.kind === 'puddle' ? 0 : 1); });
+
   const boss = bossForFloor(num);
   const quota = Math.min(30, 8 + num * 2);
   const initial = boss ? 3 : Math.ceil(quota * 0.6);
@@ -148,6 +183,7 @@ function generateFloor(num, rng){
     spawn: spawn,
     gate: gate,
     decor: decor,
+    props: props,
     quota: quota,
     initial: initial,
     spawnInterval: Math.max(1.2, 2.6 - num * 0.1),
@@ -167,4 +203,22 @@ function placeMobSpot(world, rng, px, py){
     if(d > 300 && d < 900) return { x: x, y: y };
   }
   return freeSpot(world.w, world.h, world.obstacles, rng, 300, px, py);
+}
+
+// A free spot away from the keepers that, among a handful of candidates, lies
+// farthest from other shadows — so spawns cover the whole floor instead of
+// clumping. `farLimit` keeps timed spawns from appearing absurdly far away.
+function spreadSpot(world, rng, keepers, enemies, minKeeperDist, farLimit){
+  let best = null, bestScore = -Infinity;
+  for(let i = 0; i < 16; i++){
+    const x = rng.range(80, world.w - 80), y = rng.range(80, world.h - 80);
+    if(inAnyObstacle(world.obstacles, x, y, 30)) continue;
+    let dk = Infinity, de = 600;
+    for(let k = 0; k < keepers.length; k++) dk = Math.min(dk, dist(x, y, keepers[k].x, keepers[k].y));
+    if(dk < minKeeperDist) continue;
+    for(let e = 0; e < enemies.length; e++) de = Math.min(de, dist(x, y, enemies[e].x, enemies[e].y));
+    const score = de - Math.max(0, dk - farLimit) * 0.6;
+    if(score > bestScore){ bestScore = score; best = { x: x, y: y }; }
+  }
+  return best || placeMobSpot(world, rng, keepers[0].x, keepers[0].y);
 }

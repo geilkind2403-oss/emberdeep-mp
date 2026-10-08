@@ -41,6 +41,26 @@
     check('Lodestone pulls pickups',!game.world.pickups.length||game.world.pickups[0].x<PP.x+200);
     const near=game.spawnEnemy('shade',PP.x-90,PP.y);game.grantPower(PP,'nova');
     check('Sunburst blasts nearby shadows',near.dead);
+    check('Floors are dressed with props and lights',game.world.props.length>25&&game.world.props.filter(p=>LIT_PROPS[p.kind]).length>=7);
+    game.floor=3;game.P=null;game.nextFloor();
+    const W4=game.world,quads=new Set(game.enemies.map(e=>(e.x>W4.w/2?1:0)+(e.y>W4.h/2?2:0)));
+    check('Shadows spawn spread over the floor',quads.size>=3);
+    const savedCls=game.cls,stand=k=>{k.invulnT=0;game.keys={};game.mouse.down=false;};
+    game.cls='keeper';game.startRun();game.world.obstacles=[];game.enemies=[];let K=game.P;stand(K);
+    let tgt=game.spawnEnemy('hollow',K.x+150,K.y);let hp0=tgt.hp;game.keys={KeyE:true};game.mouse.x=tgt.x-game.cameraOrigin().x;game.mouse.y=tgt.y-game.cameraOrigin().y;game.update(1/60);game.keys={};
+    for(let i=0;i<30;i++)game.update(1/60);
+    check('Wickkeeper E plants a burning flare',K.eCdT>0&&game.zones.length===1&&tgt.hp<hp0);
+    game.cls='pyro';game.startRun();game.world.obstacles=[];game.enemies=[];K=game.P;stand(K);
+    tgt=game.spawnEnemy('hollow',K.x+200,K.y);hp0=tgt.hp;game.useAbility(K,{tx:tgt.x,ty:tgt.y});
+    for(let i=0;i<40;i++)game.update(1/60);
+    check('Pyromancer is frail and its fireball explodes',K.maxHp===80&&tgt.hp<hp0-40);
+    game.cls='guardian';game.startRun();K=game.P;stand(K);game.useAbility(K,{tx:K.x,ty:K.y});const hpG=K.hp;K.invulnT=0;game.damagePlayer(30,null,K);
+    check('Guardian bulwark blocks hits',K.maxHp===140&&K.hp===hpG);
+    game.cls='nightblade';game.startRun();game.world.obstacles=[];K=game.P;stand(K);const x0=K.x;game.useAbility(K,{tx:K.x+200,ty:K.y});
+    check('Nightblade shadowstep blinks',K.x-x0>150);
+    game.cls='lightbinder';game.startRun();K=game.P;stand(K);K.hp=40;game.useAbility(K,{tx:K.x,ty:K.y});
+    check('Lightbinder mends vigor',K.hp===75);
+    game.cls=savedCls;
     game.startRun();game.world.obstacles=[];game.enemies=[];
     for(const type of Object.keys(ENEMY_DEFS))game.spawnEnemy(type,game.P.x+120,game.P.y+50);
     for(const pattern of ['drift','telegraph','charge','summonT','snuffT','novaT']){

@@ -47,6 +47,41 @@ const UPGRADES = [
   { id: 'ward',   name: 'Amber Ward', desc: '+12% chance to negate a hit', flavor: 'The lantern remembers being a shield.', max: 2, apply: function(p){ p.ward += 0.12; } }
 ];
 
+// Keeper classes: picked on the title screen, each with its own ability on E.
+const CLASSES = {
+  keeper: {
+    name: 'WICKKEEPER', icon: '◈', role: 'The balanced lantern-bearer',
+    hp: 100, speed: 1, light: 0, flameDps: 1, flameRange: 0, dashCd: 0,
+    passive: 'No weakness, no favourite.',
+    ability: { id: 'flare', name: 'FLARE BEACON', cd: 11, desc: 'Plant a beacon at the cursor: it lights the dark and burns shadows for 6s.' }
+  },
+  pyro: {
+    name: 'PYROMANCER', icon: '✺', role: 'Mage of the old fire',
+    hp: 80, speed: 1, light: 0, flameDps: 1.15, flameRange: 20, dashCd: 0,
+    passive: '+15% flame damage, +20 flame range. Frail: 80 Vigor.',
+    ability: { id: 'fireball', name: 'FIREBALL', cd: 3.5, cost: 6, desc: 'Hurl an exploding fireball at the cursor (6 oil).' }
+  },
+  guardian: {
+    name: 'GUARDIAN', icon: '⬡', role: 'Shield of the descent',
+    hp: 140, speed: 0.92, light: 0, flameDps: 1, flameRange: 0, dashCd: 0,
+    passive: '140 Vigor, a little slower.',
+    ability: { id: 'bulwark', name: 'BULWARK', cd: 14, desc: 'You and keepers nearby are untouchable for 3s; shadows are hurled back.' }
+  },
+  nightblade: {
+    name: 'NIGHTBLADE', icon: '⟁', role: 'Blade between the shadows',
+    hp: 85, speed: 1.15, light: 0, flameDps: 1, flameRange: 0, dashCd: -0.4,
+    passive: '+15% speed, faster Wickstep. 85 Vigor.',
+    ability: { id: 'blink', name: 'SHADOWSTEP', cd: 6, desc: 'Blink to the cursor; both ends burst with shadowfire.' }
+  },
+  lightbinder: {
+    name: 'LIGHTBINDER', icon: '✚', role: 'Healer of the last light',
+    hp: 95, speed: 1, light: 40, flameDps: 1, flameRange: 0, dashCd: 0,
+    passive: '+40 light radius.',
+    ability: { id: 'mend', name: 'MENDING LIGHT', cd: 13, desc: 'Restore 35 Vigor and 20 Oil to you and keepers nearby.' }
+  }
+};
+const CLASS_IDS = Object.keys(CLASSES);
+
 // Temporary power-ups: lying on every floor and dropped by fallen shadows.
 const POWERUPS = {
   blaze:  { name: 'INFERNO',    desc: 'Flame burns twice as hot',  dur: 10, color: '#ff8a3d', icon: '♨' },

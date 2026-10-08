@@ -1,4 +1,4 @@
-.coop-box{margin-top:14px;border:1px solid rgba(245,179,73,.35);border-radius:10px;
+.coop-box{margin-top:10px;border:1px solid rgba(245,179,73,.35);border-radius:10px;
   background:rgba(7,9,18,.85);padding:12px 14px;max-width:500px;margin-left:auto;margin-right:auto}
 .coop-title{font-size:13px;letter-spacing:3px;color:#f5b349;margin-bottom:6px}
 .coop-row{display:flex;gap:8px;justify-content:center;align-items:center;margin:6px 0;flex-wrap:wrap}
@@ -31,3 +31,8 @@ body.coop-guest .host-only{display:none}
 .buff-row:empty{display:none}
 .card.chosen{border-color:var(--amber);box-shadow:0 0 40px #d49c4333}
 .card:disabled:not(.chosen){opacity:.4}
+.class-pick{display:block;margin-top:12px;background:none;border:none;border-bottom:1px dashed #8e704766;padding:2px 0;color:#d9b77a;
+  font:10px var(--mono);letter-spacing:1.5px;cursor:pointer;text-align:left}
+.class-pick:hover{color:#ffd99a;border-bottom-color:#ebc58a}
+.class-card{width:min(100%,220px);min-height:300px}
+.class-card .class-passive{color:#94a19d;font-size:11px}
