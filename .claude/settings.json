@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcpgithubcreate_pull_request",
+      "mcpgithubmerge_pull_request"
+    ]
+  }
+}
