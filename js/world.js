@@ -115,6 +115,12 @@ function generateFloor(num, rng){
     const s = freeSpot(w, h, obstacles, rng, 300, spawn.x, spawn.y);
     pickups.push({ type: 'wick', x: s.x, y: s.y, val: 24, t: rng.range(0, 9) });
   }
+  const nPower = Math.min(4, 2 + Math.floor(num / 3));
+  for(let i = 0; i < nPower; i++){
+    const s = freeSpot(w, h, obstacles, rng, 260, spawn.x, spawn.y);
+    pickups.push({ type: 'power', kind: rng.pick(POWER_KINDS), x: s.x, y: s.y, val: 0, t: rng.range(0, 9) });
+  }
+  pickups.forEach(function(p, i){ p.id = i + 1; });
 
   const decor = [];
   const nDec = 18 + Math.min(14, num);
@@ -136,6 +142,7 @@ function generateFloor(num, rng){
     w: w, h: h,
     obstacles: obstacles,
     pickups: pickups,
+    nextPickupId: pickups.length + 1,
     vents: vents,
     ventCycleT: rng.range(8, 14),
     spawn: spawn,

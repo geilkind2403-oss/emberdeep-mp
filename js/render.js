@@ -184,11 +184,11 @@ class Renderer {
     c.fillStyle='#060d12';c.fillRect(0,0,this.w,this.h);
     if(!this.worldCache||this.worldCache.world!==W)this.bakeWorld(W);
     c.save();c.translate(-ox,-oy);c.drawImage(this.worldCache.canvas,0,0);
-    const lightR=Math.max(12,P.lightR*G.lightMult());
+    const lightR=P.alive===false?0:Math.max(12,P.lightR*G.lightMult());
     // Long, soft silhouettes give the lantern physical weight in the room.
     c.fillStyle='rgba(1,5,9,.35)';
     W.obstacles.forEach(o=>{
-      if(dist(P.x,P.y,o.x+o.w/2,o.y+o.h/2)>lightR+Math.max(o.w,o.h))return;
+      if(!lightR||dist(P.x,P.y,o.x+o.w/2,o.y+o.h/2)>lightR+Math.max(o.w,o.h))return;
       const pts=[[o.x,o.y],[o.x+o.w,o.y],[o.x+o.w,o.y+o.h],[o.x,o.y+o.h]];
       for(let i=0;i<4;i++){
         const a=pts[i],b=pts[(i+1)%4],dx=(a[0]+b[0])/2-P.x,dy=(a[1]+b[1])/2-P.y;
@@ -256,12 +256,18 @@ class Renderer {
   drawPickups(c,G,t){
     G.world.pickups.forEach(p=>{
       if(!this.visible(p.x,p.y,40))return;
-      const bob=this.reducedMotion?0:Math.sin(t*2.6+p.t)*3;const color=p.type==='wick'?'#98d9bc':'#eec480';
+      const power=p.type==='power'&&POWERUPS[p.kind];
+      const bob=this.reducedMotion?0:Math.sin(t*2.6+p.t)*3;const color=power?power.color:p.type==='wick'?'#98d9bc':'#eec480';
       c.save();c.translate(p.x,p.y);c.fillStyle='#00000066';c.beginPath();c.ellipse(0,9,9,3,0,0,TAU);c.fill();this.glowCircle(c,0,0,30,color,.15);c.translate(0,bob);
       if(p.type==='ember'){
         c.rotate(.2*Math.sin(t*1.5+p.t));c.fillStyle='#bf7c3e';polygon(c,[[0,-8],[5,0],[0,8],[-5,0]]);c.fill();c.fillStyle='#ffe0a1';polygon(c,[[0,-8],[0,5],[-4,0]]);c.fill();
       }else if(p.type==='oil'){
         c.fillStyle='#172a2a';rrPath(c,-7,-9,14,19,3);c.fill();c.strokeStyle='#c9aa68';c.lineWidth=1;c.stroke();c.fillStyle='#dda64fa6';c.fillRect(-5,-1,10,8);c.fillStyle='#7f754e';c.fillRect(-4,-13,8,5);c.fillStyle='#ffe5a9a6';c.fillRect(-4,-6,2,11);
+      }else if(power){
+        const pulse=this.reducedMotion?.5:.5+.5*Math.sin(t*4+p.t);
+        c.globalCompositeOperation='lighter';this.glowCircle(c,0,0,24+pulse*8,color,.45);c.globalCompositeOperation='source-over';
+        c.fillStyle='#0b1416';circle(c,0,0,11);c.fill();c.strokeStyle=color;c.lineWidth=1.5;circle(c,0,0,11+pulse*2);c.stroke();
+        c.fillStyle=color;c.font='13px serif';c.textAlign='center';c.textBaseline='middle';c.fillText(power.icon,0,1);
       }else{
         c.strokeStyle='#98d9bc';c.lineWidth=1;c.rotate(Math.PI/4);c.strokeRect(-7,-7,14,14);c.fillStyle='#a4e0c2';c.fillRect(-2,-6,4,12);c.fillRect(-6,-2,12,4);
       }c.restore();
@@ -327,19 +333,22 @@ class Renderer {
     if(P.alive===false){c.save();c.globalAlpha=.4;this.keeper(c,P.x,P.y,P.aim,0,0,true);c.restore();return;}
     c.save();if(P.invulnT>0)c.globalAlpha=this.reducedMotion?.75:.8+.2*Math.sin(t*18);
     this.keeper(c,P.x,P.y,P.aim,P.walk||0,this.reducedMotion?0:t,false,P.oil>0);c.restore();
+    this.drawBuffs(c,P,t);
     if(P.oil>0){c.save();c.globalCompositeOperation='lighter';this.glowCircle(c,P.x+Math.cos(P.aim)*14,P.y+Math.sin(P.aim)*14,16,'#ffcf80',.25);c.restore();}
   }
   drawMates(c,G,t){
     const self=this;
     G.coopMates().forEach(function(m){
       if(m.alive===false){
-        c.save();c.fillStyle='rgba(255,255,255,.45)';c.font='12px sans-serif';c.textAlign='center';
-        c.fillText((m.name||'Keeper')+' … '+Math.ceil(m.respawnT||0)+'s',m.x,m.y-24);c.restore();
+        c.save();c.globalAlpha=.4;self.keeper(c,m.x,m.y,m.aim,0,0,true);
+        c.fillStyle='#ffffff';c.font='12px sans-serif';c.textAlign='center';
+        c.fillText((m.name||'Keeper')+' · fallen',m.x,m.y-24);c.restore();
         return;
       }
       self.drawFlameCone(c,m,t);self.drawSurge(c,m);
       c.save();if(m.invulnT>0)c.globalAlpha=self.reducedMotion?.75:.8+.2*Math.sin(t*18);
       self.keeper(c,m.x,m.y,m.aim,m.walk||0,self.reducedMotion?0:t,false,m.oil>0);c.restore();
+      self.drawBuffs(c,m,t);
       c.save();c.globalCompositeOperation='lighter';
       self.glowCircle(c,m.x,m.y,Math.max(12,m.lightR)*1.4,'#d59648',m.oil>0?.15:.025);
       c.globalCompositeOperation='source-over';
@@ -349,6 +358,17 @@ class Renderer {
       c.fillStyle='#7dff9a';c.fillRect(m.x-16,m.y+18,32*clamp(m.hp/m.maxHp,0,1),4);
       c.restore();
     });
+  }
+  // One ring per active power-up; Aegis is a full bubble.
+  drawBuffs(c,p,t){
+    const kinds=Object.keys(p.buffs||{});if(!kinds.length)return;
+    c.save();c.globalCompositeOperation='lighter';
+    kinds.forEach((k,i)=>{
+      const def=POWERUPS[k],fade=clamp(p.buffs[k]/2,0,1),spin=this.reducedMotion?0:t*2+i;
+      if(k==='aegis'){this.glowCircle(c,p.x,p.y,34,def.color,.25*fade);c.strokeStyle=hexA(def.color,.6*fade);c.lineWidth=1.5;circle(c,p.x,p.y,27);c.stroke();return;}
+      c.strokeStyle=hexA(def.color,.7*fade);c.lineWidth=2;c.beginPath();c.arc(p.x,p.y,21+i*4,spin,spin+TAU*.6);c.stroke();
+    });
+    c.restore();
   }
   drawTrails(c,G){
     if(this.reducedMotion)return;c.save();
@@ -411,11 +431,12 @@ class Renderer {
     });c.restore();
   }
   drawReticle(G,ox,oy){
-    if(G.state!=='playing')return;const c=this.ctx,P=G.P,x=G.mouse.x,y=G.mouse.y;
+    if(G.state!=='playing'||G.P.alive===false)return;const c=this.ctx,P=G.P,x=G.mouse.x,y=G.mouse.y;
     if(!x&&!y)return;c.save();c.translate(x,y);c.strokeStyle=P.flameOn?'#ffda88':'#b5bea080';c.lineWidth=1;
     const r=P.flameOn?8:6;for(let i=0;i<4;i++){c.rotate(Math.PI/2);c.beginPath();c.moveTo(r,0);c.lineTo(r+4,0);c.stroke();}circle(c,0,0,2);c.stroke();c.restore();
   }
   drawDamage(c,G){
+    if(G.P.alive===false)return;
     const hurt=G.hurtT||0,low=clamp((.3-G.P.hp/G.P.maxHp)/.3,0,1)*.25;
     if(hurt<=0&&low<=0)return;const a=this.reducedMotion?low:Math.max(low,hurt*.55);
     const g=c.createRadialGradient(this.w/2,this.h/2,this.h*.2,this.w/2,this.h/2,Math.max(this.w,this.h)*.65);g.addColorStop(0,'#a22e3000');g.addColorStop(1,hexA('#bd4940',a));c.fillStyle=g;c.fillRect(0,0,this.w,this.h);
@@ -427,17 +448,19 @@ class Renderer {
     c.save();c.translate(xx,yy);c.rotate(a);c.strokeStyle='#eac986';c.lineWidth=1.5;c.beginPath();c.moveTo(-6,-6);c.lineTo(0,0);c.lineTo(-6,6);c.stroke();c.restore();
   }
   syncHud(G,P,W){
-    if(!this.hud){const $=id=>document.getElementById(id);this.hud={};['hpFill','hpText','oilFill','oilText','floorLabel','floorName','scoreVal','emberVal','surgeFill','dashFill','surgeTime','dashTime','bossWrap','bossName','bossFill','darkWarn','hint','objective','fuelPrompt'].forEach(id=>this.hud[id]=$(id));}
+    if(!this.hud){const $=id=>document.getElementById(id);this.hud={};['hpFill','hpText','oilFill','oilText','floorLabel','floorName','scoreVal','emberVal','surgeFill','dashFill','surgeTime','dashTime','bossWrap','bossName','bossFill','darkWarn','hint','objective','fuelPrompt','buffRow'].forEach(id=>this.hud[id]=$(id));}
     // The HUD does not need to update at the canvas frame rate.
     if(this.hudTime!==undefined&&G.t-this.hudTime<.08&&G.t>=this.hudTime)return;this.hudTime=G.t;
     const h=this.hud;h.hpFill.style.width=clamp(P.hp/P.maxHp*100,0,100)+'%';h.oilFill.style.width=clamp(P.oil/P.maxOil*100,0,100)+'%';
     h.hpText.textContent=Math.ceil(P.hp)+' / '+P.maxHp;h.oilText.textContent=Math.ceil(P.oil)+' / '+P.maxOil;
-    h.floorLabel.textContent='DEPTH '+String(W.num).padStart(2,'0');h.floorName.textContent=floorName(W.num);
+    const team=G.coop?G.teamSize():1;
+    h.floorLabel.textContent='DEPTH '+String(W.num).padStart(2,'0')+(team>1?' · '+team+' KEEPERS · SHADOWS ×'+teamScale(team).hp.toFixed(2):'');h.floorName.textContent=floorName(W.num);
     h.scoreVal.textContent=String(Math.round(G.score)).padStart(4,'0');h.emberVal.textContent='◆ '+Math.round(G.embers)+' EMBERS';
     ['surge','dash'].forEach(k=>{const ready=P[k+'CdT']<=0;h[k+'Fill'].style.height=clamp(1-P[k+'CdT']/P[k].cd,0,1)*100+'%';h[k+'Time'].textContent=ready?'':P[k+'CdT'].toFixed(1);h[k+'Fill'].parentElement.classList.toggle('ready',ready);});
     const boss=G.enemies.find(e=>e.isBoss&&!e.dead);h.bossWrap.classList.toggle('hidden',!boss);
     if(boss){h.bossName.textContent=boss.d.name;h.bossFill.style.width=clamp(boss.hp/boss.maxHp*100,0,100)+'%';}
     const remaining=G.enemies.length+W.spawnsLeft;h.objective.textContent=W.gateOpen?'THE STAIR IS LIT · DESCEND':boss?'EXTINGUISH THE '+(boss.type==='warden'?'WARDEN':'WRAITH'):remaining+' SHADOWS REMAIN';
+    h.buffRow.textContent=Object.keys(P.buffs||{}).map(k=>POWERUPS[k].icon+' '+POWERUPS[k].name+' '+Math.ceil(P.buffs[k])).join('   ');
     h.darkWarn.classList.toggle('hidden',P.oil>5||P.hp<=0);h.hint.classList.toggle('off',G.t>12);
     if(h.fuelPrompt){h.fuelPrompt.classList.toggle('hidden',!G.fuelStatus);h.fuelPrompt.textContent=G.fuelStatus||'';}
   }

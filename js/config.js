@@ -47,6 +47,23 @@ const UPGRADES = [
   { id: 'ward',   name: 'Amber Ward', desc: '+12% chance to negate a hit', flavor: 'The lantern remembers being a shield.', max: 2, apply: function(p){ p.ward += 0.12; } }
 ];
 
+// Temporary power-ups: lying on every floor and dropped by fallen shadows.
+const POWERUPS = {
+  blaze:  { name: 'INFERNO',    desc: 'Flame burns twice as hot',  dur: 10, color: '#ff8a3d', icon: '♨' },
+  haste:  { name: 'QUICKSTEP',  desc: '+40% move speed',           dur: 10, color: '#7ddcff', icon: '»' },
+  aegis:  { name: 'AEGIS',      desc: 'Hits cannot touch you',     dur: 6,  color: '#f4e3a1', icon: '⬡' },
+  well:   { name: 'WELLSPRING', desc: 'The lantern burns no oil',  dur: 10, color: '#83e3c2', icon: '◈' },
+  magnet: { name: 'LODESTONE',  desc: 'Pickups drift toward you',  dur: 14, color: '#c48aff', icon: '✦' },
+  nova:   { name: 'SUNBURST',   desc: 'One blast of the old sun',  dur: 0,  color: '#ffd98a', icon: '✹' }
+};
+const POWER_KINDS = Object.keys(POWERUPS);
+
+// Co-op difficulty: every keeper beyond the first makes the deep harder.
+function teamScale(keepers){
+  const k = Math.max(0, keepers - 1);
+  return { hp: 1 + 0.35 * k, bossHp: 1 + 0.6 * k, dmg: 1 + 0.1 * k, count: 1 + 0.3 * k };
+}
+
 const FLOOR_NAMES = [
   'The Drowned Gallery',
   'The Candle Warrens',

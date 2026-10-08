@@ -3,17 +3,20 @@
    The host simulates the world (enemies, damage, oil, pickups, vents). Guests
    move their own keeper locally, so walking has no network lag, and send
    position + input; the host answers with snapshots that guests smooth out.
-   Team rules: score and embers are shared, the host picks one boon for the
-   whole team, fallen guests respawn after 5s, the run ends when the host falls.
+   Team rules: score and embers are shared; vigor, oil, boons and power-ups are
+   each keeper's own. A fallen keeper watches until the team slays the next
+   boss, then returns without boons. The run ends when every keeper has fallen.
+   Every extra keeper makes the shadows tougher and more numerous (teamScale).
 
    Game messages (transport messages live in mp-net.js):
-   host->guest: start | floor {floor, seed, upg, keepers} | state {st, ...} |
-                upg-open {ids} | end {kind} | title | say {msg}
-   guest->host: in {x, y, tp, mx, my, a, f, s, dt} */
+   host->guest: start | floor {floor, seed, keepers} | stats {keepers} | state {st, ...} |
+                upg-open {ids, secs} | end {kind} | title | say {msg}
+   guest->host: in {x, y, tp, mx, my, a, f, s, dt} | pick {id} */
 
 var COOP_SNAP_MS = 66;      // ~15 snapshots per second
 var COOP_INPUT_MS = 33;     // ~30 inputs per second
 var COOP_INPUT_STALE = 500; // ms; older input counts as "let go"
+var COOP_BOON_SECONDS = 30; // a boon is picked for whoever has not chosen by then
 
 function Coop(game){
   const self = this;
@@ -24,6 +27,8 @@ function Coop(game){
   this.inputs = {};           // host: id -> latest input
   this.lastSnap = 0;
   this.pickupSig = '';        // host: pickups are only sent when they change
+  this.boons = null;          // host: {pending: {keeperId: [boon ids]}, deadline}
+  this.boonDeadline = 0;      // guest: when the host auto-picks for us
   this.hostState = 'playing'; // guest: what the host's game is doing
   this.enemyMap = new Map();  // guest: id -> enemy shell
   this.stats = {};            // guest: id -> keeper stats from the last floor message
@@ -90,9 +95,11 @@ Coop.prototype.onLobby = function(info){
     });
     return;
   }
-  this.uiStatus(info.isHost
+  const scale = teamScale(info.players.length);
+  const hard = info.players.length > 1 ? ' Gegner: ×' + scale.hp.toFixed(2) + ' Leben, ×' + scale.count.toFixed(1) + ' Anzahl.' : '';
+  this.uiStatus((info.isHost
     ? 'Lobby ' + info.code + ' offen (' + info.players.length + '/' + MP_MAX_PLAYERS + ') — schick den Invite-Link an deine Keeper.'
-    : 'Verbunden mit Lobby ' + info.code + ' — warte auf den Host.');
+    : 'Verbunden mit Lobby ' + info.code + ' — warte auf den Host.') + hard);
 };
 Coop.prototype.wireUi = function(){
   const self = this, u = this.ui();
@@ -150,6 +157,7 @@ Coop.prototype.onRunStart = function(){
   this.runSeed = (Math.random() * 0x7fffffff) >>> 0;
   this.mates = new Map();
   this.inputs = {};
+  this.boons = null;
   this.net.broadcast({ t: 'start' });
   return this.runSeed;
 };
@@ -158,6 +166,7 @@ Coop.prototype.endRun = function(){
   this.mates = new Map();
   this.inputs = {};
   this.enemyMap = new Map();
+  this.boons = null;
   document.body.classList.remove('coop-guest');
   this.setBanner('');
   this.refreshUi();
@@ -181,8 +190,7 @@ Coop.prototype.onClosed = function(reason){
 };
 
 // ---------- Host ----------
-// Keeps one simulated keeper per guest in the lobby. Late joiners get the boons
-// the team already picked.
+// Keeps one simulated keeper per guest in the lobby. Late joiners start fresh.
 Coop.prototype.syncMates = function(){
   const g = this.game, self = this, seen = {};
   this.net.players.forEach(function(p){
@@ -195,8 +203,6 @@ Coop.prototype.syncMates = function(){
     if(!m){
       m = g.makePlayer();
       m.id = p.id;
-      m.alive = true;
-      UPGRADES.forEach(function(u){ for(let i = 0; i < (g.upgLevels[u.id] || 0); i++) u.apply(m); });
       self.mates.set(p.id, m);
     }
     m.name = p.name; m.color = p.color;
@@ -219,10 +225,13 @@ Coop.prototype.onPeerLeft = function(id){
   const m = this.mates.get(id);
   if(!m) return;
   this.mates.delete(id);
-  if(this.active()) this.say(m.name + ' has left the descent.');
+  if(!this.active()) return;
+  this.say(m.name + ' has left the descent.');
+  if(this.boons){ delete this.boons.pending[id]; this.checkBoonsDone(); }
+  this.game.checkTeamWipe();
 };
 Coop.prototype.keeperStats = function(p){
-  return { id: p.id, x: Math.round(p.x), y: Math.round(p.y), tp: p.tp,
+  return { id: p.id, x: Math.round(p.x), y: Math.round(p.y), tp: p.tp, upg: p.upg,
     speed: p.speed, lightR: p.lightR, maxHp: p.maxHp, maxOil: p.maxOil,
     flame: { range: p.flame.range, half: p.flame.half },
     surge: { r: p.surge.r, cd: p.surge.cd },
@@ -230,7 +239,7 @@ Coop.prototype.keeperStats = function(p){
 };
 Coop.prototype.floorMsg = function(){
   const g = this.game;
-  return { t: 'floor', floor: g.floor, seed: g.runSeed >>> 0, upg: g.upgLevels,
+  return { t: 'floor', floor: g.floor, seed: g.runSeed >>> 0,
     keepers: g.allPlayers().map(this.keeperStats, this) };
 };
 Coop.prototype.onFloor = function(){
@@ -238,7 +247,63 @@ Coop.prototype.onFloor = function(){
   this.lastSnap = 0;
   this.net.broadcast(this.floorMsg());
 };
-Coop.prototype.onUpgradeOpen = function(ids){ this.net.broadcast({ t: 'upg-open', ids: ids }); };
+// Boons after a floor: every living keeper gets their own hand of three.
+Coop.prototype.beginBoonRound = function(){
+  const g = this.game, self = this;
+  this.boons = { pending: {}, deadline: performance.now() + COOP_BOON_SECONDS * 1000 };
+  g.allPlayers().forEach(function(p){
+    if(p.alive === false) return;
+    const ids = g.rollBoons(p).map(function(u){ return u.id; });
+    if(!ids.length) return;
+    self.boons.pending[p.id] = ids;
+    if(p !== g.P) self.net.sendTo(p.id, { t: 'upg-open', ids: ids, secs: COOP_BOON_SECONDS });
+  });
+  if(!Object.keys(this.boons.pending).length){ this.boons = null; g.nextFloor(); return; }
+  g.showUpgrade(this.boons.pending[g.P.id] || []);
+};
+Coop.prototype.pickBoon = function(id){
+  if(this.isHost) this.resolvePick(this.game.P, id);
+  else this.net.send({ t: 'pick', id: id });
+};
+Coop.prototype.resolvePick = function(p, id){
+  const b = this.boons, offered = b && b.pending[p.id];
+  if(!offered || offered.indexOf(id) < 0) return;
+  delete b.pending[p.id];
+  this.game.applyUpgrade(UPGRADES.find(function(u){ return u.id === id; }), p);
+  this.checkBoonsDone();
+};
+Coop.prototype.checkBoonsDone = function(){
+  if(!this.boons || Object.keys(this.boons.pending).length) return;
+  this.boons = null;
+  this.game.nextFloor();
+};
+Coop.prototype.keeperById = function(id){
+  return id === this.game.P.id ? this.game.P : this.mates.get(id);
+};
+Coop.prototype.tickBoons = function(){
+  const g = this.game, now = performance.now();
+  if(g.state !== 'upgrade') return;
+  if(this.isHost && this.boons){
+    if(now > this.boons.deadline){
+      const pending = this.boons.pending, self = this;
+      Object.keys(pending).forEach(function(id){
+        const p = self.keeperById(id);
+        if(p) self.resolvePick(p, pick(pending[id]));
+        else if(self.boons) delete self.boons.pending[id];
+      });
+      this.checkBoonsDone();
+      return;
+    }
+    const left = Math.ceil((this.boons.deadline - now) / 1000), n = Object.keys(this.boons.pending).length;
+    if(!g.boonChosen && this.boons.pending[g.P.id]) g.setBoonNote('Your boon is yours alone · auto-pick in ' + left + 's');
+    else g.setBoonNote('Waiting for ' + n + ' keeper' + (n > 1 ? 's' : '') + ' · auto-pick in ' + left + 's');
+  } else if(!this.isHost && this.boonDeadline && !g.boonChosen){
+    g.setBoonNote('Your boon is yours alone · auto-pick in ' + Math.max(0, Math.ceil((this.boonDeadline - now) / 1000)) + 's');
+  }
+};
+Coop.prototype.onStatsChanged = function(){
+  this.net.broadcast({ t: 'stats', keepers: this.game.allPlayers().map(this.keeperStats, this) });
+};
 Coop.prototype.onEnd = function(kind){ this.net.broadcast({ t: 'end', kind: kind }); };
 Coop.prototype.inputFor = function(m){
   const inp = this.inputs[m.id];
@@ -259,7 +324,7 @@ Coop.prototype.snapshot = function(){
     keepers: g.allPlayers().map(function(p){
       return { id: p.id, x: r(p.x), y: r(p.y), a: r2(p.aim), w: r1(p.walk || 0), hp: r1(p.hp), oil: r1(p.oil),
         f: p.flameOn ? 1 : 0, sg: r2(p.surgeT), scd: r1(p.surgeCdT), iv: r1(p.invulnT), sn: r1(p.snuffT || 0),
-        dead: p.alive === false ? 1 : 0, rs: r1(p.respawnT || 0), tp: p.tp };
+        dead: p.alive === false ? 1 : 0, tp: p.tp, bf: roundBuffs(p.buffs) };
     }),
     enemies: g.enemies.map(function(e){
       const o = { id: e.id, k: e.type, x: r(e.x), y: r(e.y), hp: r(e.hp), mh: e.maxHp, fl: r2(e.flash) };
@@ -272,13 +337,19 @@ Coop.prototype.snapshot = function(){
   const sig = W.pickups.length + ':' + W.pickups.reduce(function(a, p){ return a + p.x * 3 + p.y; }, 0);
   if(sig !== this.pickupSig){
     this.pickupSig = sig;
-    msg.pickups = W.pickups.map(function(p){ return [p.type, r(p.x), r(p.y), p.val, r1(p.t || 0)]; });
+    msg.pickups = W.pickups.map(function(p){ return [p.id, p.type, r(p.x), r(p.y), p.val, r1(p.t || 0), p.kind]; });
   }
   return msg;
 };
+function roundBuffs(b){
+  const out = {};
+  for(const k in b) out[k] = Math.round(b[k] * 10) / 10;
+  return out;
+}
 // Runs on a timer (not the render loop) so a hidden tab still answers at ~1Hz.
 Coop.prototype.netTick = function(){
   if(!this.active()) return;
+  this.tickBoons();
   if(this.isHost){
     const now = performance.now();
     if(now - this.lastSnap < COOP_SNAP_MS - 5) return;
@@ -305,6 +376,7 @@ Coop.prototype.sendInput = function(){
 Coop.prototype.onMessage = function(msg, from){
   if(this.isHost){
     if(msg.t === 'in'){ msg.at = performance.now(); this.inputs[from] = msg; }
+    else if(msg.t === 'pick' && this.mates.has(from)) this.resolvePick(this.mates.get(from), msg.id);
     return;
   }
   if(msg.t === 'start'){ this.beginGuestRun(); return; }
@@ -312,7 +384,11 @@ Coop.prototype.onMessage = function(msg, from){
   if(!this.active()) return;
   const g = this.game;
   if(msg.t === 'state') this.applyState(msg);
-  else if(msg.t === 'upg-open') g.showUpgrade(msg.ids);
+  else if(msg.t === 'upg-open'){
+    this.boonDeadline = performance.now() + msg.secs * 1000;
+    g.showUpgrade(msg.ids);
+  }
+  else if(msg.t === 'stats') this.applyKeeperStats(msg.keepers);
   else if(msg.t === 'end'){ if(msg.kind === 'victory') g.victory(); else g.gameOver(); }
   else if(msg.t === 'title'){
     this.endRun();
@@ -328,13 +404,14 @@ Coop.prototype.beginGuestRun = function(){
   document.body.classList.add('coop-guest');
   g.stopInput();
   g.state = 'title'; g.world = null; g.P = null;
-  g.floor = 0; g.score = 0; g.embers = 0; g.upgLevels = {}; g.t = 0;
+  g.floor = 0; g.score = 0; g.embers = 0; g.t = 0;
   this.mates = new Map();
   this.enemyMap = new Map();
   this.hostState = 'playing';
   this.uiStatus('Der Host startet den Abstieg …');
 };
 Coop.prototype.applyStats = function(p, st){
+  p.upg = st.upg || {};
   p.speed = st.speed; p.lightR = st.lightR; p.maxHp = st.maxHp; p.maxOil = st.maxOil;
   Object.assign(p.flame, st.flame); Object.assign(p.surge, st.surge); Object.assign(p.dash, st.dash);
 };
@@ -342,7 +419,7 @@ Coop.prototype.newShell = function(id){
   const st = this.stats[id], info = this.net.players.find(function(p){ return p.id === id; }) || {};
   const m = { id: id, name: info.name || 'Keeper', color: info.color || '#8fd0ff',
     x: 0, y: 0, nx: 0, ny: 0, aim: 0, walk: 0, hp: 1, oil: 1, tp: 0, alive: true,
-    flame: {}, surge: {}, dash: {} };
+    flame: {}, surge: {}, dash: {}, buffs: {} };
   this.applyStats(m, st || this.keeperStats(this.game.makePlayer()));
   return m;
 };
@@ -351,7 +428,7 @@ Coop.prototype.onFloorMsg = function(msg){
   if(!this.active()) this.beginGuestRun();
   g.runSeed = msg.seed >>> 0;
   g.floor = msg.floor - 1;
-  g.upgLevels = msg.upg || {};
+  this.boonDeadline = 0;
   this.stats = {};
   msg.keepers.forEach(function(k){ self.stats[k.id] = k; });
   this.mates = new Map();
@@ -368,6 +445,15 @@ Coop.prototype.onFloorMsg = function(msg){
   g.cam = { x: g.P.x, y: g.P.y };
   if(g.world.boss) SFX.bossRoar();
   this.uiStatus('Floor ' + msg.floor + ' — gleiche Karte wie beim Host.');
+};
+// Stats change on revival (boons are lost); positions come with the snapshots.
+Coop.prototype.applyKeeperStats = function(list){
+  const g = this.game, self = this;
+  list.forEach(function(k){
+    self.stats[k.id] = k;
+    const p = k.id === self.net.myId ? g.P : self.mates.get(k.id);
+    if(p) self.applyStats(p, k);
+  });
 };
 Coop.prototype.applyState = function(s){
   const g = this.game;
@@ -403,8 +489,13 @@ Coop.prototype.applyKeepers = function(list, fresh){
         g.hurtT = 0.6; g.shake += 2.5; SFX.hurt();
         g.burst(P.x, P.y, '#ff4d6d', 1, 10, 4, 0.5);
       }
+      for(const b in k.bf){
+        if(P.buffs[b] > 0 || fresh) continue;
+        SFX.power();
+        g.toast(POWERUPS[b].name);
+      }
       P.hp = k.hp; P.oil = k.oil; P.surgeT = k.sg; P.surgeCdT = k.scd;
-      P.invulnT = k.iv; P.snuffT = k.sn; P.alive = !k.dead; P.respawnT = k.rs;
+      P.invulnT = k.iv; P.snuffT = k.sn; P.alive = !k.dead; P.buffs = k.bf;
       return;
     }
     seen[k.id] = true;
@@ -413,7 +504,7 @@ Coop.prototype.applyKeepers = function(list, fresh){
     if(k.tp !== m.tp){ m.x = k.x; m.y = k.y; }
     m.nx = k.x; m.ny = k.y; m.tp = k.tp;
     m.aim = k.a; m.walk = k.w; m.hp = k.hp; m.oil = k.oil; m.flameOn = !!k.f;
-    m.surgeT = k.sg; m.invulnT = k.iv; m.snuffT = k.sn; m.alive = !k.dead; m.respawnT = k.rs;
+    m.surgeT = k.sg; m.invulnT = k.iv; m.snuffT = k.sn; m.alive = !k.dead; m.buffs = k.bf;
   });
   this.mates.forEach(function(m, id){ if(!seen[id]) self.mates.delete(id); });
 };
@@ -438,17 +529,17 @@ Coop.prototype.applyEnemies = function(list, fresh){
 };
 Coop.prototype.applyPickups = function(list, fresh){
   const g = this.game, P = g.P, W = g.world;
-  const next = list.map(function(a){ return { type: a[0], x: a[1], y: a[2], val: a[3], t: a[4] }; });
+  const next = list.map(function(a){ return { id: a[0], type: a[1], x: a[2], y: a[3], val: a[4], t: a[5], kind: a[6] }; });
   if(!fresh){
     const keep = {};
-    next.forEach(function(p){ keep[p.type + Math.round(p.x) + ',' + Math.round(p.y)] = true; });
+    next.forEach(function(p){ keep[p.id] = true; });
     W.pickups.forEach(function(p){
-      if(keep[p.type + Math.round(p.x) + ',' + Math.round(p.y)]) return;
+      if(keep[p.id]) return;
       g.pickupFx(p);
       if(dist(P.x, P.y, p.x, p.y) > 60) return; // someone else took it
       if(p.type === 'ember') SFX.pick();
       else if(p.type === 'oil') SFX.oilPick();
-      else SFX.wickPick();
+      else if(p.type === 'wick') SFX.wickPick();
     });
   }
   W.pickups = next;
@@ -463,9 +554,19 @@ Coop.prototype.smooth = function(dt){
   this.mates.forEach(ease);
   g.enemies.forEach(function(e){ ease(e); e.flash = Math.max(0, e.flash - dt); });
   g.shots.forEach(function(s){ s.x += s.vx * dt; s.y += s.vy * dt; });
-  const P = g.P;
-  this.setBanner(this.hostState === 'pause' ? 'HOST PAUSED · THE DARK WAITS'
-    : P.alive === false ? 'YOU ARE DOWN · BACK IN ' + Math.ceil(P.respawnT || 0) + 's' : '');
+};
+Coop.prototype.refreshBanner = function(){
+  const P = this.game.P;
+  this.setBanner(!this.isHost && this.hostState === 'pause' ? 'HOST PAUSED · THE DARK WAITS'
+    : P.alive === false ? 'YOU HAVE FALLEN · ' + this.reviveHint()
+    : !this.isHost && this.hostState === 'upgrade' ? 'YOUR TEAM IS CHOOSING BOONS' : '');
+};
+Coop.prototype.reviveHint = function(){
+  const g = this.game, boss = g.enemies.find(function(e){ return e.isBoss; });
+  if(boss) return 'BACK WHEN ' + boss.d.name + ' FALLS';
+  let n = g.floor + 1;
+  while(!bossForFloor(n)) n++;
+  return 'BACK AFTER THE BOSS OF FLOOR ' + n;
 };
 Coop.prototype.setBanner = function(text){
   if(text === this.banner) return;
