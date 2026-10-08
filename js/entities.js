@@ -8,10 +8,13 @@ function makeShard(x, y, vx, vy, dmg){
   return { x: x, y: y, vx: vx, vy: vy, r: 5, dmg: dmg, life: 1.7, color: '#ff8a3d', kind: 'shard', dead: false };
 }
 
+let nextEnemyId = 1;
+
 class Enemy {
   constructor(G, type, x, y){
     const d = ENEMY_DEFS[type];
     const f = G.floor;
+    this.id = nextEnemyId++;
     this.type = type;
     this.d = d;
     this.x = x; this.y = y;
@@ -35,7 +38,7 @@ class Enemy {
     this.phase = 1;
   }
 
-  moveToward(G, P, ang, sp, dt){
+  moveToward(ang, sp, dt){
     this.x += Math.cos(ang) * sp * dt + this.kb.x * dt;
     this.y += Math.sin(ang) * sp * dt + this.kb.y * dt;
   }
@@ -51,7 +54,7 @@ class Enemy {
   }
 
   bossAI(dt, G){
-    const P = G.nearestPlayer(this.x, this.y) || G.P;
+    const P = G.nearestPlayer(this.x, this.y);
     const isWarden = this.d.boss === 'warden';
     this.patT -= dt;
     const dx = P.x - this.x, dy = P.y - this.y;
@@ -65,7 +68,7 @@ class Enemy {
         const sp = (isWarden ? 58 : 86) * (fast ? 1.5 : 1);
         const wob = Math.sin(G.t * 1.1 + this.seed) * 0.5;
         const a = Math.atan2(diry, dirx) + wob;
-        this.moveToward(G, P, a, sp, dt);
+        this.moveToward(a, sp, dt);
         if(this.patT <= 0){
           const opts = ['charge', 'summon', 'snuff'];
           if(isWarden && this.phase >= 2) opts.push('nova');
@@ -122,7 +125,7 @@ class Enemy {
 
   update(dt, G){
     if(this.dead) return;
-    const P = G.nearestPlayer(this.x, this.y) || G.P;
+    const P = G.nearestPlayer(this.x, this.y);
     if(!P) return;
     this.flash = Math.max(0, this.flash - dt);
     const k = Math.exp(-5 * dt);
@@ -148,7 +151,7 @@ class Enemy {
           G.shots.push(makeOrb(this.x + Math.cos(a) * 16, this.y + Math.sin(a) * 16, Math.cos(a) * ps, Math.sin(a) * ps, this.dmg));
         }
       }
-      this.moveToward(G, P, ang, sp, dt);
+      this.moveToward(ang, sp, dt);
     }
     this.constrain(G);
     d = dist(P.x, P.y, this.x, this.y);
