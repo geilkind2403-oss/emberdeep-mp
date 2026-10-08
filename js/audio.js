@@ -138,6 +138,11 @@ class SfxEngine {
       SFX.tone({ f: f, d: 0.2, v: 0.1, at: i * 0.07, type: 'triangle' });
     });
   }
+  power(){
+    [440, 554, 659, 880].forEach(function(f, i){
+      SFX.tone({ f: f, f2: f * 1.5, d: 0.18, v: 0.1, at: i * 0.05, type: 'triangle' });
+    });
+  }
   bossRoar(){
     this.tone({ f: 55, f2: 38, d: 1.2, v: 0.38, type: 'sawtooth' });
     this.noiseHit({ f: 120, f2: 40, d: 1, v: 0.28, ft: 'lowpass' });

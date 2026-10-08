@@ -29,11 +29,13 @@ class Game {
     this.t = 0;
     this.score = 0;
     this.embers = 0;
-    this.upgLevels = {};
     this.last = 0;
     this.initInput();
     this.initButtons();
   }
+
+  // Boon levels belong to the local keeper (each co-op keeper has their own).
+  get upgLevels(){ return (this.P && this.P.upg) || {}; }
 
   stopInput(){
     this.keys = {}; this.mouse.down = false;
@@ -180,7 +182,6 @@ class Game {
     this.floor = 0;
     this.score = 0;
     this.embers = 0;
-    this.upgLevels = {};
     this.runSeed = this.coop ? this.coop.onRunStart() : (Date.now() >>> 0);
     this.nextFloor();
   }
@@ -214,7 +215,10 @@ class Game {
     P.invulnT = 0;
     P.dashDir = { x: 1, y: 0 };
     P.fuelFxT = 0;
-    P.tp = 0; // bumped on every teleport (floor start, respawn) so co-op guests can snap
+    P.tp = 0; // bumped on every teleport (floor start, revive) so co-op guests can snap
+    P.alive = true;
+    P.upg = {};   // boon levels
+    P.buffs = {}; // power-up kind -> seconds left
     return P;
   }
 
@@ -236,22 +240,48 @@ class Game {
     }
     return best || this.P;
   }
+  // Solo: the run ends. Co-op: the keeper falls and watches until the team slays
+  // the next boss; the run ends once every keeper has fallen.
   keeperDown(p){
     p.hp = 0;
-    if(p === this.P) this.gameOver();
-    else this.mateDown(p);
+    if(!this.coop){ this.gameOver(); return; }
+    p.alive = false; p.flameOn = false; p.buffs = {};
+    if(p === this.P) this.stopInput();
+    this.burst(p.x, p.y, '#ff4d6d', 1.4, 18, 5, 0.8);
+    this.effect(p.x, p.y, '#ff4d6d', 90);
+    this.coop.say((p.name || 'Keeper') + ' has fallen');
+    this.checkTeamWipe();
   }
-  mateDown(m){
-    m.hp = 0; m.alive = false; m.respawnT = 5; m.flameOn = false;
-    this.burst(m.x, m.y, '#ff4d6d', 1.4, 18, 5, 0.8);
-    this.effect(m.x, m.y, '#ff4d6d', 90);
-    this.coop.say((m.name || 'Keeper') + ' is down — respawn in 5s');
+  checkTeamWipe(){
+    if(this.state === 'playing' && !this.allPlayers().some(function(k){ return k.alive !== false; })) this.gameOver();
   }
-  respawnMate(m){
-    m.alive = true; m.hp = m.maxHp; m.oil = Math.max(m.oil, m.maxOil * 0.5);
-    m.invulnT = 1.5;
-    this.placeKeeper(m, 0, 1);
+  // A slain boss brings fallen keepers back next to `at` — fresh, without their boons.
+  reviveFallen(at){
+    const fallen = this.allPlayers().filter(function(p){ return p.alive === false; });
+    fallen.forEach((p, i) => {
+      const fresh = this.makePlayer();
+      ['id', 'name', 'color', 'tp'].forEach(function(k){ fresh[k] = p[k]; });
+      Object.assign(p, fresh);
+      p.walk = 0; p.snuffT = 0; p.invulnT = 2;
+      const a = i / fallen.length * TAU;
+      p.x = at.x + Math.cos(a) * 45; p.y = at.y + Math.sin(a) * 45;
+      this.constrainKeeper(p);
+      p.tp++;
+      this.burst(p.x, p.y, '#ffd98a', 1.4, 20, 5, 0.9);
+      this.effect(p.x, p.y, '#ffd98a', 110);
+    });
+    if(fallen.length){
+      this.coop.say('THE FALLEN RETURN');
+      this.coop.onStatsChanged();
+    }
   }
+  // Fallen keepers watch a living teammate.
+  focusKeeper(){
+    const P = this.P;
+    if(P.alive !== false) return P;
+    return this.coopMates().find(function(m){ return m.alive !== false; }) || P;
+  }
+  teamSize(){ return this.allPlayers().length || 1; }
   // Puts a keeper on the floor spawn; co-op keepers fan out around it.
   placeKeeper(p, i, n){
     const W = this.world, a = i / Math.max(1, n) * TAU;
@@ -275,11 +305,7 @@ class Game {
     const mates = this.coopMates();
     for(let i = 0; i < mates.length && this.state === 'playing'; i++){
       const m = mates[i];
-      if(m.alive === false){
-        m.respawnT -= dt;
-        if(m.respawnT <= 0) this.respawnMate(m);
-        continue;
-      }
+      if(m.alive === false) continue;
       const inp = this.coop.inputFor(m);
       if(inp.x !== undefined){
         const k = 1 - Math.exp(-25 * dt);
@@ -305,13 +331,15 @@ class Game {
     this.flameSound(P.flameOn);
     if(P.flameOn) this.emitFlame(P, dt);
     coop.smooth(dt);
+    coop.refreshBanner();
     this.fuelStatus = this.fuelPrompt(P);
     this.updateFx(dt);
   }
-  applyUpgrade(u){
-    this.upgLevels[u.id] = (this.upgLevels[u.id] || 0) + 1;
-    this.allPlayers().forEach(function(p){ u.apply(p); });
-    this.toast(u.name.toUpperCase());
+  applyUpgrade(u, p){
+    p = p || this.P;
+    p.upg[u.id] = (p.upg[u.id] || 0) + 1;
+    u.apply(p);
+    if(p === this.P) this.toast(u.name.toUpperCase());
   }
   nextFloor(){
     const guest = this.isGuest();
@@ -332,10 +360,14 @@ class Game {
       p.surgeT = p.surgeCdT = p.dashT = p.dashCdT = p.invulnT = 0;
       p.snuffT = 0;
       p.walk = 0;
-      p.oil = Math.min(p.maxOil, p.oil + 30);
-      if(p.alive === false){ p.alive = true; p.hp = p.maxHp; }
+      p.buffs = {};
+      if(p.alive !== false) p.oil = Math.min(p.maxOil, p.oil + 30);
     });
     this.stopInput();
+    // Every extra keeper brings more shadows.
+    const scale = teamScale(keepers.length);
+    W.quota = Math.round(W.quota * scale.count);
+    W.initial = Math.round(W.initial * scale.count);
     W.spawnsLeft = W.boss ? 0 : W.quota - W.initial;
     W.spawnT = W.spawnInterval;
     if(!guest) this.spawnFloorEnemies();
@@ -407,7 +439,12 @@ class Game {
     const K = killer || this.P;
     this.score += e.d.pts;
     this.embers += Math.round(e.d.ember * ((K && K.greed) || 1));
-    this.world.pickups.push({ type: 'oil', x: e.x, y: e.y, val: e.isBoss ? 60 : 14, t: this.t });
+    this.addPickup({ type: 'oil', x: e.x, y: e.y, val: e.isBoss ? 60 : 14, t: this.t });
+    const drops = e.isBoss ? 2 : (Math.random() < 0.06 ? 1 : 0);
+    for(let i = 0; i < drops; i++){
+      const a = Math.random() * TAU;
+      this.addPickup({ type: 'power', kind: pick(POWER_KINDS), x: e.x + Math.cos(a) * 40, y: e.y + Math.sin(a) * 40, val: 0, t: this.t });
+    }
     if(K){
       K.hp = Math.min(K.maxHp, K.hp + (K.lifesteal || 0));
       K.oil = Math.min(K.maxOil, K.oil + (K.oilOnKill || 0));
@@ -421,6 +458,12 @@ class Game {
         this.shots.push(makeShard(e.x, e.y, Math.cos(a) * sp, Math.sin(a) * sp, e.dmg * 0.6));
       }
     }
+    if(e.isBoss && this.coop) this.reviveFallen(K && K.alive !== false ? K : e);
+  }
+  addPickup(pk){
+    pk.id = this.world.nextPickupId++;
+    this.world.pickups.push(pk);
+    return pk;
   }
   // Death feedback; co-op guests replay it when an enemy vanishes from a snapshot.
   killFx(e){
@@ -438,6 +481,11 @@ class Game {
   damagePlayer(amount, src, target){
     const P = target || this.P, local = P === this.P;
     if(!P || P.hp <= 0 || P.invulnT > 0 || P.dashT > 0) return;
+    if(P.buffs.aegis > 0){
+      this.burst(P.x, P.y, POWERUPS.aegis.color, 0.8, 6, 3, 0.35);
+      P.invulnT = 0.25;
+      return;
+    }
     if(P.ward > 0 && Math.random() < P.ward){
       this.burst(P.x, P.y, '#ffd98a', 1, 8, 4, 0.4);
       if(local) SFX.hitE();
@@ -526,35 +574,31 @@ class Game {
     if(el) el.textContent = this.best > 0 ? 'BEST  ' + this.best : '';
   }
 
-  // Boon choice. In co-op the host picks for the whole team and guests see the
-  // same cards read-only (`ids` comes from the host).
+  // Three random boons the keeper has not maxed yet.
+  rollBoons(p){
+    const pool = UPGRADES.filter(function(u){ return (p.upg[u.id] || 0) < u.max; });
+    const picks = [];
+    while(picks.length < 3 && pool.length) picks.push(pool.splice((Math.random() * pool.length) | 0, 1)[0]);
+    return picks;
+  }
+  // Boon choice. Solo rolls here; in co-op the host rolls one hand per keeper
+  // (`ids`) and every keeper picks their own.
   showUpgrade(ids){
-    const game = this, guest = this.isGuest();
+    const game = this;
     this.state = 'upgrade';
-    let picks;
-    if(ids){
-      picks = ids.map(function(id){ return UPGRADES.find(function(u){ return u.id === id; }); }).filter(Boolean);
-    } else {
-      const pool = UPGRADES.filter(function(u){
-        return !game.upgLevels[u.id] || game.upgLevels[u.id] < u.max;
-      });
-      picks = [];
-      while(picks.length < 3 && pool.length){
-        picks.push(pool.splice((Math.random() * pool.length) | 0, 1)[0]);
-      }
-    }
+    this.boonChosen = false;
+    const picks = ids ? ids.map(function(id){ return UPGRADES.find(function(u){ return u.id === id; }); }).filter(Boolean)
+      : this.rollBoons(this.P);
+    if(!picks.length && !this.coop){ this.nextFloor(); return; }
     const wrap = document.getElementById('upgradeCards');
     wrap.innerHTML = '';
-    if(!picks.length){ if(!guest) this.nextFloor(); return; }
-    if(this.coop && !guest) this.coop.onUpgradeOpen(picks.map(function(u){ return u.id; }));
-    document.getElementById('upgradeSub').textContent = guest ? 'The host chooses one gift for the whole team.'
-      : this.coop ? 'Your choice empowers every keeper.' : 'The stair hums. Take one gift and descend.';
+    this.setBoonNote(!this.coop ? 'The stair hums. Take one gift and descend.'
+      : picks.length ? 'Your boon is yours alone.' : 'Your teammates are choosing their boons…');
     for(let i = 0; i < picks.length; i++){
       (function(u){
         const card = document.createElement('button');
         card.type = 'button';
         card.className = 'card';
-        card.disabled = guest;
         card.dataset.id = u.id;
         const icon = document.createElement('div');
         icon.className = 'boon-icon'; icon.textContent = BOON_SYMBOLS[u.id] || '✧';
@@ -582,16 +626,29 @@ class Game {
           pips.appendChild(dot);
         }
         card.appendChild(pips);
-        card.addEventListener('click', function(){
-          if(game.state !== 'upgrade' || game.isGuest()) return;
-          SFX.upgrade();
-          game.applyUpgrade(u);
-          game.nextFloor();
-        });
+        card.addEventListener('click', function(){ game.chooseBoon(u, card); });
         wrap.appendChild(card);
       })(picks[i]);
     }
     this.showScreen('screen-upgrade');
+  }
+  chooseBoon(u, card){
+    if(this.state !== 'upgrade' || this.boonChosen) return;
+    this.boonChosen = true;
+    SFX.upgrade();
+    if(!this.coop){
+      this.applyUpgrade(u);
+      this.nextFloor();
+      return;
+    }
+    card.classList.add('chosen');
+    document.querySelectorAll('#upgradeCards .card').forEach(function(c){ c.disabled = true; });
+    this.setBoonNote('Waiting for the other keepers…');
+    this.coop.pickBoon(u.id);
+  }
+  setBoonNote(text){
+    const el = document.getElementById('upgradeSub');
+    if(el.textContent !== text) el.textContent = text;
   }
 
   endless(){
@@ -609,6 +666,7 @@ class Game {
       return;
     }
     if(this.floor === CFG.floorMax) this.victory();
+    else if(this.coop) this.coop.beginBoonRound();
     else this.showUpgrade();
   }
 
@@ -623,7 +681,7 @@ class Game {
       const looseFuel = this.world.pickups.filter(function(p){ return p.source === 'vent' && !p.taken; }).length;
       if(looseFuel < 6){
         const a = Math.random() * TAU;
-        this.world.pickups.push({
+        this.addPickup({
           type: 'oil', source: 'vent', val: 12,
           x: vent.x + Math.cos(a) * 34, y: vent.y + Math.sin(a) * 34,
           t: this.t
@@ -726,7 +784,7 @@ class Game {
     this.hurtT = Math.max(0, this.hurtT - dt);
   }
   followCamera(dt){
-    const P = this.P, follow = this.R.reducedMotion ? 1 : 1 - Math.exp(-12 * dt);
+    const P = this.focusKeeper(), follow = this.R.reducedMotion ? 1 : 1 - Math.exp(-12 * dt);
     this.cam.x = lerp(this.cam.x, P.x, follow);
     this.cam.y = lerp(this.cam.y, P.y, follow);
   }
@@ -753,8 +811,9 @@ class Game {
       p.x += p.dashDir.x * p.dash.speed * dt;
       p.y += p.dashDir.y * p.dash.speed * dt;
     } else if(mvl){
-      p.x += (inp.mx / mvl) * p.speed * dt;
-      p.y += (inp.my / mvl) * p.speed * dt;
+      const speed = p.speed * (p.buffs.haste > 0 ? 1.4 : 1);
+      p.x += (inp.mx / mvl) * speed * dt;
+      p.y += (inp.my / mvl) * speed * dt;
     }
     this.constrainKeeper(p);
 
@@ -778,12 +837,17 @@ class Game {
     p.surgeCdT = Math.max(0, p.surgeCdT - dt);
     p.invulnT = Math.max(0, p.invulnT - dt);
     p.snuffT = Math.max(0, (p.snuffT || 0) - dt);
+    for(const k in p.buffs){
+      p.buffs[k] -= dt;
+      if(p.buffs[k] <= 0) delete p.buffs[k];
+    }
+    const freeOil = p.buffs.well > 0;
     if(inp.surge && p.surgeCdT <= 0 && p.oil > 0) this.surge(p);
 
-    p.oil = Math.max(0, p.oil - CFG.drain * dt);
+    if(!freeOil) p.oil = Math.max(0, p.oil - CFG.drain * dt);
     p.flameOn = !!inp.fire && p.oil > 0;
     if(p.flameOn){
-      p.oil = Math.max(0, p.oil - p.flame.cost * dt);
+      if(!freeOil) p.oil = Math.max(0, p.oil - p.flame.cost * dt);
       if(p.flame.heal > 0) p.hp = Math.min(p.maxHp, p.hp + p.flame.heal * dt);
     }
     if(local) this.flameSound(p.flameOn);
@@ -801,30 +865,49 @@ class Game {
   surge(p){
     p.surgeCdT = p.surge.cd;
     p.surgeT = 0.6;
-    p.oil = Math.max(0, p.oil - 5);
+    if(!(p.buffs.well > 0)) p.oil = Math.max(0, p.oil - 5);
     if(p === this.P){
       SFX.surge();
       this.shake += 3;
     }
     this.burst(p.x, p.y, '#ffd98a', 1.5, 24, 6, 0.9);
+    this.blast(p, p.surge.r, p.surge.dmg, p.surge.kb);
+  }
+  // Damages and shoves every enemy in range and snuffs enemy shots.
+  blast(p, r, dmg, kb){
     for(let i = 0; i < this.enemies.length; i++){
       const e = this.enemies[i];
       if(e.dead) continue;
       const d = dist(p.x, p.y, e.x, e.y);
-      if(d < p.surge.r + e.r){
-        e.hp -= p.surge.dmg;
+      if(d < r + e.r){
+        e.hp -= dmg;
         e.flash = 0.3;
         const dx = e.x - p.x, dy = e.y - p.y;
         const dd = Math.hypot(dx, dy) || 1;
-        e.kb.x += (dx / dd) * p.surge.kb;
-        e.kb.y += (dy / dd) * p.surge.kb;
+        e.kb.x += (dx / dd) * kb;
+        e.kb.y += (dy / dd) * kb;
         if(e.hp <= 0) this.killEnemy(e, p);
       }
     }
     for(let i = 0; i < this.shots.length; i++){
       const s = this.shots[i];
       if(s.kind !== 'orb' && s.kind !== 'shard') continue;
-      if(dist(p.x, p.y, s.x, s.y) < p.surge.r) s.dead = true;
+      if(dist(p.x, p.y, s.x, s.y) < r) s.dead = true;
+    }
+  }
+  grantPower(p, kind){
+    const def = POWERUPS[kind];
+    if(kind === 'nova'){
+      this.blast(p, 320, 90 + 12 * this.floor, 520);
+      this.effect(p.x, p.y, def.color, 320);
+      if(p === this.P) this.shake += 5;
+    } else {
+      p.buffs[kind] = def.dur;
+      if(kind === 'well') p.oil = Math.min(p.maxOil, p.oil + 30);
+    }
+    if(p === this.P){
+      SFX.power();
+      this.toast(def.name);
     }
   }
   emitFlame(p, dt){
@@ -841,7 +924,7 @@ class Game {
     }
   }
   burnCone(p, dt){
-    const dmg = p.flame.dps * dt;
+    const dmg = p.flame.dps * dt * (p.buffs.blaze > 0 ? 2 : 1);
     for(let i = 0; i < this.enemies.length; i++){
       const e = this.enemies[i];
       if(e.dead) continue;
@@ -868,18 +951,19 @@ class Game {
     this.t += dt;
     if(this.isGuest()){ this.updateGuest(dt); return; }
     const W = this.world, P = this.P;
-    if(!W || !P || P.hp <= 0) return;
+    if(!W || !P || P.hp <= 0 && !this.coop) return;
 
     this.decayFeedback(dt);
     this.followCamera(dt);
-    const inp = this.localInput();
-    this.moveKeeper(P, inp, dt);
+    const inp = this.localInput(), alive = P.alive !== false;
+    if(alive) this.moveKeeper(P, inp, dt);
     this.updateFuelVents(dt);
-    this.actKeeper(P, inp, dt);
+    if(alive) this.actKeeper(P, inp, dt);
     if(this.state !== 'playing') return;
     if(this.coop){
       this.updateMates(dt);
       if(this.state !== 'playing') return;
+      this.coop.refreshBanner();
     }
 
     for(let i = 0; i < this.enemies.length; i++){
@@ -894,7 +978,8 @@ class Game {
     W.spawnT -= dt;
     if(W.spawnT <= 0 && W.spawnsLeft > 0){
       W.spawnT = W.spawnInterval; W.spawnsLeft--;
-      const spot = placeMobSpot(W, this.rng, P.x, P.y);
+      const near = this.focusKeeper();
+      const spot = placeMobSpot(W, this.rng, near.x, near.y);
       this.spawnEnemy(pickMobType(this.floor, this.rng), spot.x, spot.y);
     }
     if(!W.gateOpen && W.spawnsLeft === 0 && this.enemies.length === 0) this.stepGate();
@@ -906,8 +991,17 @@ class Game {
       }
     }
 
+    const magnets = keepers.filter(function(k){ return k.hp > 0 && k.buffs.magnet > 0; });
     for(let i = 0; i < W.pickups.length; i++){
       const pk = W.pickups[i];
+      for(let mi = 0; mi < magnets.length; mi++){
+        const m = magnets[mi], d = dist(m.x, m.y, pk.x, pk.y);
+        if(d > 280 || d < 1) continue;
+        const step = Math.min(d, 480 * dt);
+        pk.x += (m.x - pk.x) / d * step;
+        pk.y += (m.y - pk.y) / d * step;
+        break;
+      }
       for(let pi = 0; pi < keepers.length; pi++){
         const taker = keepers[pi], local = taker === P;
         if(taker.hp <= 0 || dist(taker.x, taker.y, pk.x, pk.y) >= 26) continue;
@@ -918,6 +1012,8 @@ class Game {
         } else if(pk.type === 'oil'){
           taker.oil = Math.min(taker.maxOil, taker.oil + pk.val);
           if(local) SFX.oilPick();
+        } else if(pk.type === 'power'){
+          this.grantPower(taker, pk.kind);
         } else {
           taker.hp = Math.min(taker.maxHp, taker.hp + pk.val);
           if(local) SFX.wickPick();
@@ -951,6 +1047,13 @@ class Game {
     this.updateFx(dt);
   }
   pickupFx(pk){
+    if(pk.type === 'power'){
+      const def = POWERUPS[pk.kind];
+      this.burst(pk.x, pk.y, def.color, 1.1, 16, 4, 0.7);
+      this.effect(pk.x, pk.y, def.color, 60);
+      this.floatText(pk.x, pk.y, def.name, def.color);
+      return;
+    }
     this.burst(pk.x, pk.y, '#ffd98a', 0.7, 8, 3, 0.5);
     this.effect(pk.x, pk.y, pk.type === 'wick' ? '#98d9bc' : '#eec480', 25);
     if(pk.type !== 'ember') this.floatText(pk.x, pk.y, '+' + pk.val + (pk.type === 'oil' ? ' OIL' : ' VIGOR'), pk.type === 'wick' ? '#98d9bc' : '#eec480');

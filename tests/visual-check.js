@@ -31,6 +31,17 @@
     game.P.oil=0;const hp=game.P.hp;game.update(.02);game.R.render(game,.02);
     check('Empty lantern still damages player',game.P.hp<hp);
     game.startRun();game.world.obstacles=[];game.enemies=[];
+    check('Power-ups lie on every floor',game.world.pickups.some(p=>p.type==='power'&&POWERUPS[p.kind]));
+    const PP=game.P;PP.aim=0;PP.invulnT=0;PP.buffs.aegis=5;const hpA=PP.hp;game.damagePlayer(50,null,PP);
+    check('Aegis blocks hits',PP.hp===hpA);
+    const foe=game.spawnEnemy('hollow',PP.x+60,PP.y);let h0=foe.hp;game.burnCone(PP,.1);const plain=h0-foe.hp;
+    PP.buffs.blaze=5;h0=foe.hp;game.burnCone(PP,.1);
+    check('Inferno doubles flame damage',plain>0&&Math.abs((h0-foe.hp)-2*plain)<1e-6);
+    game.world.pickups=[{id:900,type:'ember',x:PP.x+200,y:PP.y,val:1,t:0}];PP.buffs={magnet:5};game.keys={};game.update(.1);
+    check('Lodestone pulls pickups',!game.world.pickups.length||game.world.pickups[0].x<PP.x+200);
+    const near=game.spawnEnemy('shade',PP.x-90,PP.y);game.grantPower(PP,'nova');
+    check('Sunburst blasts nearby shadows',near.dead);
+    game.startRun();game.world.obstacles=[];game.enemies=[];
     for(const type of Object.keys(ENEMY_DEFS))game.spawnEnemy(type,game.P.x+120,game.P.y+50);
     for(const pattern of ['drift','telegraph','charge','summonT','snuffT','novaT']){
       game.enemies.forEach(e=>{e.pat=pattern;e.flash=.2;});game.R.render(game,.016);

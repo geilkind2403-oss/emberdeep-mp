@@ -17,7 +17,7 @@
 body.coop-guest .guest-only{display:block}
 body.coop-guest .host-only{display:none}
 .card:disabled{cursor:default}
-.card:disabled:hover{transform:none;border-color:#b8a27340;box-shadow:none}
+.card:disabled:not(.chosen):hover{transform:none;border-color:#b8a27340;box-shadow:none}
 @media(max-width:760px){.coop-banner{top:220px;font-size:8px;letter-spacing:1px}}
 /* An open lobby makes the title column tall; tighten it on short desktop screens. */
 @media(min-width:761px) and (max-height:920px){
@@ -27,3 +27,7 @@ body.coop-guest .host-only{display:none}
   .title-content .tip{margin-top:8px}
   .title-content .btn.big{padding:16px 24px}
 }
+.buff-row{font:9px/1.7 var(--mono);letter-spacing:1px;color:#f0ca83;margin-top:10px}
+.buff-row:empty{display:none}
+.card.chosen{border-color:var(--amber);box-shadow:0 0 40px #d49c4333}
+.card:disabled:not(.chosen){opacity:.4}

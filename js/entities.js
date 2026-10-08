@@ -19,8 +19,9 @@ class Enemy {
     this.d = d;
     this.x = x; this.y = y;
     this.r = d.r;
-    const hpScale = d.boss ? 1 + 0.16 * Math.max(0, f - CFG.floorMax) : 1 + 0.16 * (f - 1);
-    const dmgScale = 1 + 0.09 * (f - 1);
+    const team = teamScale(G.teamSize());
+    const hpScale = (d.boss ? 1 + 0.16 * Math.max(0, f - CFG.floorMax) : 1 + 0.16 * (f - 1)) * (d.boss ? team.bossHp : team.hp);
+    const dmgScale = (1 + 0.09 * (f - 1)) * team.dmg;
     this.maxHp = Math.round(d.hp * hpScale);
     this.hp = this.maxHp;
     this.dmg = d.dmg * dmgScale;
