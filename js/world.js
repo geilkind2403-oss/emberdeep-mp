@@ -161,11 +161,3 @@ function placeMobSpot(world, rng, px, py){
   }
   return freeSpot(world.w, world.h, world.obstacles, rng, 300, px, py);
 }
-
-function placeVentShot(world, rng){
-  if(world.vents.length){
-    const v = rng.pick(world.vents);
-    return { x: clamp(v.x, 40, world.w - 40), y: clamp(v.y, 40, world.h - 40) };
-  }
-  return { x: rng.range(60, world.w - 60), y: rng.range(60, world.h - 60) };
-}

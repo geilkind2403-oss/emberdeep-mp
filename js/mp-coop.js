@@ -1,320 +1,482 @@
 'use strict';
-/* EMBERDEEP CO-OP: gleiches Spiel, gleiche Floors, Invite-Codes.
-   Host simuliert alles (P + Mates + Gegner), Gaeste senden Input
-   und bekommen Snapshots. Team-Regeln:
-   - Score/Ember geteilt, Upgrades waehlt der Host und gelten fuer alle
-   - Mates respawnen nach 5s am Spawn; stirbt der Host, endet der Run */
+/* EMBERDEEP CO-OP: same dungeon, same floors, shared run, invite codes.
+   The host simulates the world (enemies, damage, oil, pickups, vents). Guests
+   move their own keeper locally, so walking has no network lag, and send
+   position + input; the host answers with snapshots that guests smooth out.
+   Team rules: score and embers are shared, the host picks one boon for the
+   whole team, fallen guests respawn after 5s, the run ends when the host falls.
 
-var COOP_COLORS = ['#8fd0ff','#c48aff','#7dff9a','#ff8a7d','#ffe9a3','#ff6b9d','#7ddcff','#f5b349'];
+   Game messages (transport messages live in mp-net.js):
+   host->guest: start | floor {floor, seed, upg, keepers} | state {st, ...} |
+                upg-open {ids} | end {kind} | title | say {msg}
+   guest->host: in {x, y, tp, mx, my, a, f, s, dt} */
+
+var COOP_SNAP_MS = 66;      // ~15 snapshots per second
+var COOP_INPUT_MS = 33;     // ~30 inputs per second
+var COOP_INPUT_STALE = 500; // ms; older input counts as "let go"
 
 function Coop(game){
+  const self = this;
   this.game = game;
-  this.net = null;
   this.isHost = false;
   this.runSeed = 0;
-  this.mates = new Map(); // host: id -> player obj | guest: id -> mate shell
-  this.inputs = {};       // host: id -> last input
+  this.mates = new Map();     // host: id -> simulated keeper | guest: id -> render shell
+  this.inputs = {};           // host: id -> latest input
   this.lastSnap = 0;
-  this.lastInput = 0;
-  this.seq = 0;
-  this.prev = { surge: false, dash: false };
-}
-Coop.prototype.say = function(msg){
-  this.game.toast(msg);
-  if(this.isHost && this.net) this.net.broadcast({ t: 'say', msg: msg });
-};
-Coop.prototype.myName = function(){
-  const el = document.getElementById('coopName');
-  return ((el && el.value) || 'Wickkeeper').slice(0, 16);
-};
-Coop.prototype.ensureNet = function(){
-  if(this.net) return this.net;
-  const self = this;
+  this.pickupSig = '';        // host: pickups are only sent when they change
+  this.hostState = 'playing'; // guest: what the host's game is doing
+  this.enemyMap = new Map();  // guest: id -> enemy shell
+  this.stats = {};            // guest: id -> keeper stats from the last floor message
+  this.fresh = false;         // guest: next snapshot is the first of a floor (no fx)
+  this.surgeTap = false;      // guest: remembers taps shorter than one input interval
+  this.banner = '';
   this.net = new MPNet({
     status: function(s){ self.uiStatus(s); },
     lobby: function(info){ self.onLobby(info); },
-    state: function(s){ if(!self.isHost) self.applyState(s); },
-    start: function(s){ self.onStartMsg(s.seed); },
-    remoteInput: function(r){ self.inputs[r.id] = r.input; },
-    peerLeft: function(pid){
-      delete self.inputs[pid];
-      if(self.isHost && self.mates.has(pid)){
-        self.mates.delete(pid);
-        self.say('A keeper has left the descent.');
-      }
-    },
-    hostLeft: function(){
-      if(!self.isHost && self.game.coop){
-        self.uiStatus('Host weg — erstelle eine neue Lobby oder joine neu.');
-        self.game.coop = null;
-      }
-    }
+    message: function(msg, from){ self.onMessage(msg, from); },
+    peerJoined: function(id){ self.onPeerJoined(id); },
+    peerLeft: function(id){ self.onPeerLeft(id); },
+    closed: function(reason){ self.onClosed(reason); }
   });
-  // Gast-Nachrichten (floor / upg / end / say) kommen als 'state'-fremde Pakete:
-  const origGuest = this.net._onGuestData.bind(this.net);
-  this.net._onGuestData = function(msg){
-    if(!msg || !msg.t) return;
-    if(msg.t === 'floor') self.onFloorMsg(msg);
-    else if(msg.t === 'upg-open') self.onUpgOpen(msg);
-    else if(msg.t === 'upg-pick') self.onUpgPick(msg);
-    else if(msg.t === 'end') self.onEndMsg(msg);
-    else if(msg.t === 'say') self.game.toast(msg.msg || '');
-    else origGuest(msg);
-  };
-  return this.net;
+  this.wireUi();
+  setInterval(function(){ self.netTick(); }, COOP_INPUT_MS);
+  window.addEventListener('pagehide', function(){ self.net.leave(); });
+}
+Coop.prototype.active = function(){ return this.game.coop === this; };
+Coop.prototype.say = function(msg){
+  this.game.toast(msg);
+  if(this.isHost) this.net.broadcast({ t: 'say', msg: msg });
+};
+Coop.prototype.myName = function(){
+  return mpCleanName(document.getElementById('coopName').value, 'Wickkeeper');
 };
 
 // ---------- Lobby UI ----------
 Coop.prototype.ui = function(){
   const $ = function(id){ return document.getElementById(id); };
-  return { invite: $('coopInvite'), players: $('coopPlayers'), status: $('coopStatus'),
-    copy: $('btnCoopCopy'), start: $('btnCoopStart'), code: $('coopCode') };
+  return { invite: $('coopInvite'), players: $('coopPlayers'), status: $('coopStatus'), code: $('coopCode'),
+    host: $('btnCoopHost'), join: $('btnCoopJoin'), copy: $('btnCoopCopy'), start: $('btnCoopStart'), leave: $('btnCoopLeave') };
 };
-Coop.prototype.uiStatus = function(s){
-  const u = this.ui();
-  if(u.status) u.status.textContent = s;
+Coop.prototype.uiStatus = function(s){ this.ui().status.textContent = s; };
+Coop.prototype.inviteUrl = function(){ return location.origin + location.pathname + '?room=' + this.net.code; };
+Coop.prototype.refreshUi = function(){
+  const u = this.ui(), net = this.net, on = net.connected();
+  u.invite.innerHTML = '';
+  if(on){
+    u.invite.append('Code ');
+    const b = document.createElement('b');
+    b.textContent = net.code;
+    u.invite.appendChild(b);
+  } else u.invite.textContent = 'No lobby yet.';
+  u.copy.disabled = !on;
+  u.start.disabled = !(on && net.isHost);
+  u.leave.disabled = !net.peer;
+  u.players.innerHTML = '';
+  net.players.forEach(function(p, i){
+    const li = document.createElement('li');
+    li.textContent = p.name + (i === 0 ? ' (Host)' : '') + (p.id === net.myId ? ' · you' : '');
+    li.style.color = p.color;
+    u.players.appendChild(li);
+  });
 };
 Coop.prototype.onLobby = function(info){
-  const u = this.ui();
-  const code = info.code || (this.net && this.net.code);
-  if(u.invite) u.invite.textContent = code ? ('Invite: ' + location.href.split('?')[0] + '?room=' + code) : 'No lobby yet.';
-  if(u.players){
-    u.players.innerHTML = '';
-    (info.players || []).forEach(function(p, i){
-      const li = document.createElement('li');
-      li.textContent = (p.name || ('P' + (i + 1))) + (i === 0 ? ' (Host)' : '');
-      li.style.color = COOP_COLORS[i % COOP_COLORS.length];
-      u.players.appendChild(li);
+  this.refreshUi();
+  if(this.active()){
+    // a keeper may have joined/renamed mid-run; keep the shells' labels current
+    const self = this;
+    info.players.forEach(function(p){
+      const m = self.mates.get(p.id);
+      if(m){ m.name = p.name; m.color = p.color; }
     });
+    return;
   }
-  if(u.copy) u.copy.disabled = !code;
-  if(u.start) u.start.disabled = !(info.isHost && (info.players || []).length >= 1);
-  if(info.isHost) this.syncMates();
   this.uiStatus(info.isHost
-    ? ('Lobby ' + code + ' offen — schick den Invite-Link an deine Keeper.')
-    : 'Verbunden. Warte auf Host-Start.');
+    ? 'Lobby ' + info.code + ' offen (' + info.players.length + '/' + MP_MAX_PLAYERS + ') — schick den Invite-Link an deine Keeper.'
+    : 'Verbunden mit Lobby ' + info.code + ' — warte auf den Host.');
 };
 Coop.prototype.wireUi = function(){
-  const self = this;
-  const $ = function(id){ return document.getElementById(id); };
-  $('btnCoopHost').addEventListener('click', function(){
-    if(typeof Peer === 'undefined'){ self.uiStatus('FEHLER: PeerJS-CDN blockiert (Adblock/VPN?). unpkg.com freigeben und neu laden.'); return; }
-    self.isHost = true;
-    self.ensureNet().host(self.myName());
+  const self = this, u = this.ui();
+  function withPeer(fn){
+    SFX.init(); // the click is the user gesture that unlocks audio for the run
+    self.uiStatus('Lade Netzwerk …');
+    mpLoadPeer(function(err){
+      if(err) self.uiStatus('FEHLER: ' + err.message);
+      else { fn(); self.refreshUi(); }
+    });
+  }
+  function join(){
+    const code = mpNormCode(u.code.value);
+    if(code.length !== 6){ self.uiStatus('Code muss 6 Zeichen haben.'); return; }
+    withPeer(function(){ self.isHost = false; self.net.join(code, self.myName()); });
+  }
+  u.host.addEventListener('click', function(){
+    withPeer(function(){ self.isHost = true; self.net.host(self.myName()); });
   });
-  $('btnCoopJoin').addEventListener('click', function(){
-    if(typeof Peer === 'undefined'){ self.uiStatus('FEHLER: PeerJS-CDN blockiert (Adblock/VPN?). unpkg.com freigeben und neu laden.'); return; }
-    const c = ($('coopCode').value || '').trim();
-    if(c.length !== 6){ self.uiStatus('Code muss 6 Zeichen haben.'); return; }
-    self.isHost = false;
-    self.ensureNet().join(c, self.myName());
-  });
-  $('btnCoopCopy').addEventListener('click', function(){
-    if(!self.net || !self.net.code) return;
-    const url = location.href.split('?')[0] + '?room=' + self.net.code;
+  u.join.addEventListener('click', join);
+  u.code.addEventListener('keydown', function(e){ if(e.key === 'Enter') join(); });
+  u.copy.addEventListener('click', function(){
+    if(!self.net.connected()) return;
+    const url = self.inviteUrl();
     function done(){ self.uiStatus('Invite-Link kopiert: ' + url); }
     if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, function(){ prompt('Link kopieren:', url); });
     else prompt('Link kopieren:', url);
   });
-  $('btnCoopStart').addEventListener('click', function(){ self.startAsHost(); });
-  try{
-    const m = /[?&]room=([A-Za-z0-9]{6})/i.exec(location.search);
-    if(m){ $('coopCode').value = m[1].toUpperCase(); self.uiStatus('Code ' + m[1].toUpperCase() + ' erkannt — Name waehlen, Join.'); }
-  }catch(e){}
+  u.start.addEventListener('click', function(){ self.startAsHost(); });
+  u.leave.addEventListener('click', function(){
+    self.net.leave();
+    self.refreshUi();
+    self.uiStatus('Lobby verlassen.');
+  });
+  window.addEventListener('keydown', function(e){ if(e.code === 'Space') self.surgeTap = true; });
+  const m = /[?&]room=([A-Za-z0-9]{6})/i.exec(location.search);
+  if(m){
+    u.code.value = m[1].toUpperCase();
+    this.uiStatus('Code ' + u.code.value + ' erkannt — Name wählen, dann Join.');
+  }
+  this.refreshUi();
 };
 
-// ---------- Start ----------
+// ---------- Run lifecycle ----------
 Coop.prototype.startAsHost = function(){
-  if(!this.net || !this.net.isHost) return;
+  if(!this.net.isHost || !this.net.connected()) return;
+  SFX.init(); SFX.start();
   this.isHost = true;
+  this.game.coop = this;
+  document.body.classList.remove('coop-guest');
+  this.game.startRun();
+};
+// Called by Game.startRun on the host: fresh keepers and a fresh dungeon for everyone.
+Coop.prototype.onRunStart = function(){
   this.runSeed = (Math.random() * 0x7fffffff) >>> 0;
   this.mates = new Map();
   this.inputs = {};
-  this.game.coop = this;
-  this.net.sendStart(this.runSeed);
-  this.syncMates();
-  if(this.game.P) this.game.P.name = this.myName();
-  this.game.startRun();
-  this.say('Co-op descent begins — ' + this.net.players.length + ' keepers.');
+  this.net.broadcast({ t: 'start' });
+  return this.runSeed;
 };
-Coop.prototype.onStartMsg = function(seed){
-  this.isHost = false;
-  this.runSeed = seed >>> 0;
+Coop.prototype.endRun = function(){
+  if(this.game.coop === this) this.game.coop = null;
   this.mates = new Map();
-  this.game.coop = this;
-  if(this.game.P) this.game.P.name = this.myName();
-  this.uiStatus('Host startet … warte auf Floor.');
+  this.inputs = {};
+  this.enemyMap = new Map();
+  document.body.classList.remove('coop-guest');
+  this.setBanner('');
+  this.refreshUi();
 };
+// Called by Game.toTitle: the host takes everyone back to the lobby, a guest leaves it.
+Coop.prototype.onTitle = function(){
+  if(this.isHost){
+    this.net.broadcast({ t: 'title' });
+    this.uiStatus('Lobby ' + this.net.code + ' ist weiter offen — Start co-op für den nächsten Abstieg.');
+  } else {
+    this.net.leave();
+    this.uiStatus('Lobby verlassen.');
+  }
+  this.endRun();
+};
+Coop.prototype.onClosed = function(reason){
+  const wasActive = this.active();
+  this.endRun();
+  if(wasActive) this.game.toTitle();
+  this.uiStatus(reason);
+};
+
+// ---------- Host ----------
+// Keeps one simulated keeper per guest in the lobby. Late joiners get the boons
+// the team already picked.
 Coop.prototype.syncMates = function(){
-  if(!this.isHost || !this.net || !this.game.world) return;
-  const self = this;
-  const list = this.net.players || [];
-  const seen = {};
-  list.forEach(function(p, i){
-    if(p.id === self.net.myId) return;
-    seen[p.id] = true;
-    if(!self.mates.has(p.id)){
-      const m = self.game.makePlayer();
-      m.id = p.id;
-      m.name = String(p.name || 'Keeper').slice(0, 16);
-      m.color = COOP_COLORS[i % COOP_COLORS.length];
-      m.alive = true;
-      self.mates.set(p.id, m);
-    } else {
-      self.mates.get(p.id).name = String(p.name || 'Keeper').slice(0, 16);
+  const g = this.game, self = this, seen = {};
+  this.net.players.forEach(function(p){
+    if(p.id === self.net.myId){
+      g.P.id = p.id; g.P.name = p.name; g.P.color = p.color;
+      return;
     }
+    seen[p.id] = true;
+    let m = self.mates.get(p.id);
+    if(!m){
+      m = g.makePlayer();
+      m.id = p.id;
+      m.alive = true;
+      UPGRADES.forEach(function(u){ for(let i = 0; i < (g.upgLevels[u.id] || 0); i++) u.apply(m); });
+      self.mates.set(p.id, m);
+    }
+    m.name = p.name; m.color = p.color;
   });
-  Array.from(this.mates.keys()).forEach(function(id){
+  this.mates.forEach(function(m, id){
     if(!seen[id]){ self.mates.delete(id); delete self.inputs[id]; }
   });
 };
-
-// ---------- Host: Broadcasts ----------
-Coop.prototype.onFloor = function(){
+Coop.prototype.onPeerJoined = function(id){
+  if(!this.active()) return;
   this.syncMates();
-  if(this.net) this.net.broadcast({ t: 'floor', floor: this.game.floor, runSeed: this.game.runSeed >>> 0 });
-  this.tickForce();
+  const m = this.mates.get(id);
+  this.net.sendTo(id, { t: 'start' });
+  this.net.sendTo(id, this.floorMsg());
+  this.pickupSig = '';
+  if(m) this.say(m.name + ' joins the descent.');
 };
-Coop.prototype.onUpgradeOpen = function(ids){
-  if(this.net) this.net.broadcast({ t: 'upg-open', ids: ids });
+Coop.prototype.onPeerLeft = function(id){
+  delete this.inputs[id];
+  const m = this.mates.get(id);
+  if(!m) return;
+  this.mates.delete(id);
+  if(this.active()) this.say(m.name + ' has left the descent.');
 };
-Coop.prototype.onUpgradePick = function(id){
-  if(this.net) this.net.broadcast({ t: 'upg-pick', id: id });
+Coop.prototype.keeperStats = function(p){
+  return { id: p.id, x: Math.round(p.x), y: Math.round(p.y), tp: p.tp,
+    speed: p.speed, lightR: p.lightR, maxHp: p.maxHp, maxOil: p.maxOil,
+    flame: { range: p.flame.range, half: p.flame.half },
+    surge: { r: p.surge.r, cd: p.surge.cd },
+    dash: { cd: p.dash.cd, dur: p.dash.dur, speed: p.dash.speed } };
 };
-Coop.prototype.onEnd = function(kind){
-  if(this.net) this.net.broadcast({ t: 'end', kind: kind });
-};
-Coop.prototype.snapPlayer = function(p){
-  return { id: p.id || 'host', name: p.name || 'Keeper', color: p.color || '#f5b349',
-    x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, oil: p.oil, maxOil: p.maxOil,
-    aim: p.aim, flameOn: !!p.flameOn, surgeT: p.surgeT || 0, walk: p.walk || 0,
-    alive: p.alive !== false, respawnT: p.respawnT || 0, invulnT: p.invulnT || 0,
-    lightR: p.lightR, surge: { r: (p.surge && p.surge.r) || 0 }, flame: { range: (p.flame && p.flame.range) || 0 } };
-};
-Coop.prototype.gather = function(){
+Coop.prototype.floorMsg = function(){
   const g = this.game;
-  const ps = [this.snapPlayer(Object.assign({ id: this.net.myId, name: this.myName() }, g.P))];
-  this.mates.forEach(function(m){ ps.push(this.snapPlayer(m)); }, this);
-  return { t: 'state', floor: g.floor, runSeed: g.runSeed >>> 0, time: g.t,
-    state: g.state, score: g.score, embers: g.embers,
-    gateOpen: !!(g.world && g.world.gateOpen), players: ps,
-    enemies: g.enemies.map(function(e){
-      return { type: e.type, x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp, r: e.r,
-        flash: e.flash, seed: e.seed, pat: e.pat, patT: e.patT, tx: e.tx, ty: e.ty,
-        isBoss: !!e.isBoss, dmg: e.dmg, speed: e.speed };
-    }),
-    shots: g.shots.map(function(s){ return { x: s.x, y: s.y, vx: s.vx, vy: s.vy, r: s.r, dmg: s.dmg, life: s.life, color: s.color, kind: s.kind }; }),
-    pickups: g.world.pickups.map(function(p){ return { type: p.type, x: p.x, y: p.y, val: p.val, t: p.t || 0 }; })
-  };
+  return { t: 'floor', floor: g.floor, seed: g.runSeed >>> 0, upg: g.upgLevels,
+    keepers: g.allPlayers().map(this.keeperStats, this) };
 };
-Coop.prototype.tickForce = function(){ this.lastSnap = -10; };
-Coop.prototype.tick = function(dt){
-  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+Coop.prototype.onFloor = function(){
+  this.pickupSig = '';
+  this.lastSnap = 0;
+  this.net.broadcast(this.floorMsg());
+};
+Coop.prototype.onUpgradeOpen = function(ids){ this.net.broadcast({ t: 'upg-open', ids: ids }); };
+Coop.prototype.onEnd = function(kind){ this.net.broadcast({ t: 'end', kind: kind }); };
+Coop.prototype.inputFor = function(m){
+  const inp = this.inputs[m.id];
+  if(!inp) return { mx: 0, my: 0, aim: m.aim, fire: false, surge: false, dashT: 0 };
+  const live = performance.now() - inp.at < COOP_INPUT_STALE;
+  // A position sent before the guest saw the latest teleport is stale.
+  const placed = inp.tp === m.tp;
+  return { mx: live ? inp.mx : 0, my: live ? inp.my : 0, aim: inp.a,
+    fire: live && !!inp.f, surge: live && !!inp.s, dashT: live ? inp.dt : 0,
+    x: placed ? inp.x : undefined, y: placed ? inp.y : undefined };
+};
+Coop.prototype.snapshot = function(){
+  const g = this.game, W = g.world;
+  if(g.state !== 'playing' || !W) return { t: 'state', st: g.state };
+  const r = Math.round, r1 = function(v){ return Math.round(v * 10) / 10; }, r2 = function(v){ return Math.round(v * 100) / 100; };
+  const msg = { t: 'state', st: 'playing', score: r(g.score), embers: r(g.embers),
+    gate: W.gateOpen ? 1 : 0, left: W.spawnsLeft,
+    keepers: g.allPlayers().map(function(p){
+      return { id: p.id, x: r(p.x), y: r(p.y), a: r2(p.aim), w: r1(p.walk || 0), hp: r1(p.hp), oil: r1(p.oil),
+        f: p.flameOn ? 1 : 0, sg: r2(p.surgeT), scd: r1(p.surgeCdT), iv: r1(p.invulnT), sn: r1(p.snuffT || 0),
+        dead: p.alive === false ? 1 : 0, rs: r1(p.respawnT || 0), tp: p.tp };
+    }),
+    enemies: g.enemies.map(function(e){
+      const o = { id: e.id, k: e.type, x: r(e.x), y: r(e.y), hp: r(e.hp), mh: e.maxHp, fl: r2(e.flash) };
+      if(e.isBoss){ o.pt = e.pat; o.tx = r(e.tx); o.ty = r(e.ty); }
+      return o;
+    }),
+    shots: g.shots.map(function(s){ return [r(s.x), r(s.y), r(s.vx), r(s.vy), s.r, s.kind === 'shard' ? 1 : 0, s.color]; }),
+    vents: W.vents.map(function(v){ return [v.active ? 1 : 0, r(v.fuel), r1(v.refillT || 0)]; })
+  };
+  const sig = W.pickups.length + ':' + W.pickups.reduce(function(a, p){ return a + p.x * 3 + p.y; }, 0);
+  if(sig !== this.pickupSig){
+    this.pickupSig = sig;
+    msg.pickups = W.pickups.map(function(p){ return [p.type, r(p.x), r(p.y), p.val, r1(p.t || 0)]; });
+  }
+  return msg;
+};
+// Runs on a timer (not the render loop) so a hidden tab still answers at ~1Hz.
+Coop.prototype.netTick = function(){
+  if(!this.active()) return;
   if(this.isHost){
-    if(now - this.lastSnap > 1 / 12){
-      this.lastSnap = now;
-      if(this.net && this.game.state === 'playing') this.net.broadcast(this.gather());
-      else if(this.net) this.net.broadcast({ t: 'state', floor: this.game.floor, runSeed: this.game.runSeed >>> 0, time: this.game.t, state: this.game.state, score: this.game.score, embers: this.game.embers, gateOpen: !!(this.game.world && this.game.world.gateOpen), players: [], enemies: [], shots: [], pickups: [] });
-    }
+    const now = performance.now();
+    if(now - this.lastSnap < COOP_SNAP_MS - 5) return;
+    this.lastSnap = now;
+    this.net.broadcast(this.snapshot());
   } else {
-    if(now - this.lastInput > 1 / 20){
-      this.lastInput = now;
-      const g = this.game, k = g.keys || {};
-      const surge = !!(k.Space), dash = !!(k.ShiftLeft || k.ShiftRight);
-      const msg = { t: 'input', seq: (++this.seq),
-        up: !!(k.KeyW), down: !!(k.KeyS), left: !!(k.KeyA), right: !!(k.KeyD),
-        fire: !!(g.mouse && g.mouse.down), ang: g.P ? g.P.aim : 0,
-        surge: surge && !this.prev.surge, dash: dash && !this.prev.dash };
-      this.prev.surge = surge; this.prev.dash = dash;
-      if(this.net) this.net.sendInput(msg);
-    }
+    this.sendInput();
   }
 };
 
-// ---------- Guest: Apply ----------
-Coop.prototype.onFloorMsg = function(msg){
+// ---------- Guest ----------
+Coop.prototype.sendInput = function(){
+  const g = this.game, P = g.P, k = g.keys;
+  if(!P) return;
+  const live = g.state === 'playing' && this.hostState === 'playing' && P.alive !== false;
+  const surge = live && (!!k.Space || this.surgeTap);
+  this.surgeTap = false;
+  this.net.send({ t: 'in', x: Math.round(P.x), y: Math.round(P.y), tp: P.tp,
+    mx: live ? (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) : 0,
+    my: live ? (k.KeyS ? 1 : 0) - (k.KeyW ? 1 : 0) : 0,
+    a: Math.round(P.aim * 100) / 100, f: live && P.flameOn ? 1 : 0, s: surge ? 1 : 0,
+    dt: Math.round(P.dashT * 100) / 100 });
+};
+Coop.prototype.onMessage = function(msg, from){
+  if(this.isHost){
+    if(msg.t === 'in'){ msg.at = performance.now(); this.inputs[from] = msg; }
+    return;
+  }
+  if(msg.t === 'start'){ this.beginGuestRun(); return; }
+  if(msg.t === 'floor'){ this.onFloorMsg(msg); return; }
+  if(!this.active()) return;
   const g = this.game;
-  g.runSeed = msg.runSeed >>> 0;
-  this.runSeed = g.runSeed;
-  g.floor = (msg.floor | 0) - 1;
+  if(msg.t === 'state') this.applyState(msg);
+  else if(msg.t === 'upg-open') g.showUpgrade(msg.ids);
+  else if(msg.t === 'end'){ if(msg.kind === 'victory') g.victory(); else g.gameOver(); }
+  else if(msg.t === 'title'){
+    this.endRun();
+    g.toTitle();
+    this.uiStatus('Der Host ist zurück in der Lobby — warte auf den nächsten Start.');
+  }
+  else if(msg.t === 'say') g.toast(msg.msg || '');
+};
+Coop.prototype.beginGuestRun = function(){
+  const g = this.game;
+  this.isHost = false;
+  g.coop = this;
+  document.body.classList.add('coop-guest');
+  g.stopInput();
+  g.state = 'title'; g.world = null; g.P = null;
+  g.floor = 0; g.score = 0; g.embers = 0; g.upgLevels = {}; g.t = 0;
+  this.mates = new Map();
+  this.enemyMap = new Map();
+  this.hostState = 'playing';
+  this.uiStatus('Der Host startet den Abstieg …');
+};
+Coop.prototype.applyStats = function(p, st){
+  p.speed = st.speed; p.lightR = st.lightR; p.maxHp = st.maxHp; p.maxOil = st.maxOil;
+  Object.assign(p.flame, st.flame); Object.assign(p.surge, st.surge); Object.assign(p.dash, st.dash);
+};
+Coop.prototype.newShell = function(id){
+  const st = this.stats[id], info = this.net.players.find(function(p){ return p.id === id; }) || {};
+  const m = { id: id, name: info.name || 'Keeper', color: info.color || '#8fd0ff',
+    x: 0, y: 0, nx: 0, ny: 0, aim: 0, walk: 0, hp: 1, oil: 1, tp: 0, alive: true,
+    flame: {}, surge: {}, dash: {} };
+  this.applyStats(m, st || this.keeperStats(this.game.makePlayer()));
+  return m;
+};
+Coop.prototype.onFloorMsg = function(msg){
+  const g = this.game, self = this, myId = this.net.myId;
+  if(!this.active()) this.beginGuestRun();
+  g.runSeed = msg.seed >>> 0;
+  g.floor = msg.floor - 1;
+  g.upgLevels = msg.upg || {};
+  this.stats = {};
+  msg.keepers.forEach(function(k){ self.stats[k.id] = k; });
+  this.mates = new Map();
+  this.enemyMap = new Map();
+  this.fresh = true;
+  this.hostState = 'playing';
   g.nextFloor();
-  if(g.P) g.P.name = this.myName();
+  msg.keepers.forEach(function(k){
+    const p = k.id === myId ? g.P : self.newShell(k.id);
+    self.applyStats(p, k);
+    p.x = p.nx = k.x; p.y = p.ny = k.y; p.tp = k.tp;
+    if(p !== g.P) self.mates.set(k.id, p);
+  });
+  g.cam = { x: g.P.x, y: g.P.y };
+  if(g.world.boss) SFX.bossRoar();
   this.uiStatus('Floor ' + msg.floor + ' — gleiche Karte wie beim Host.');
 };
 Coop.prototype.applyState = function(s){
   const g = this.game;
-  if(typeof s.runSeed === 'number') g.runSeed = s.runSeed >>> 0;
-  g.score = s.score || 0; g.embers = s.embers || 0; g.t = s.time || 0;
-  if(s.floor && s.floor !== g.floor && g.world){
-    // Floor-Desync (z.B. Spaet-Join): baue deterministisch nach
-    g.floor = s.floor - 1;
-    g.nextFloor();
+  this.hostState = s.st;
+  if(s.st !== 'playing' || !g.world || !g.P) return;
+  const W = g.world, fresh = this.fresh;
+  this.fresh = false;
+  g.score = s.score; g.embers = s.embers; W.spawnsLeft = s.left;
+  if(s.gate && !W.gateOpen && !fresh){
+    SFX.gateOpen();
+    g.toast('THE STAIR OPENS');
+    g.burst(W.gate.x, W.gate.y, '#ffd98a', 1.6, 26, 6, 1);
+    g.effect(W.gate.x, W.gate.y, '#ffd98a', 140);
   }
-  if(!g.world) return;
-  g.world.gateOpen = !!s.gateOpen;
-  const myId = this.net.myId;
-  (s.players || []).forEach(function(sp){
-    if(sp.id === myId || (!sp.id && !myId)){
-      if(g.P) Object.assign(g.P, { x: sp.x, y: sp.y, hp: sp.hp, maxHp: sp.maxHp, oil: sp.oil, maxOil: sp.maxOil, aim: sp.ang !== undefined ? sp.ang : sp.aim, flameOn: sp.flameOn, surgeT: sp.surgeT, walk: sp.walk, invulnT: sp.invulnT });
-    } else {
-      let m = this.mates.get(sp.id);
-      if(!m){
-        m = { id: sp.id, walk: 0, dashDir: { x: 1, y: 0 }, dash: { cd: 1.6, dur: 0.16, speed: 660 }, surge: { r: 230 }, flame: { range: 175 } };
-        this.mates.set(sp.id, m);
+  W.gateOpen = !!s.gate;
+  this.applyKeepers(s.keepers, fresh);
+  this.applyEnemies(s.enemies, fresh);
+  g.shots = s.shots.map(function(a){
+    return { x: a[0], y: a[1], vx: a[2], vy: a[3], r: a[4], kind: a[5] ? 'shard' : 'orb', color: a[6], dead: false };
+  });
+  s.vents.forEach(function(a, i){
+    const v = W.vents[i];
+    if(v){ v.active = !!a[0]; v.fuel = a[1]; v.refillT = a[2]; }
+  });
+  if(s.pickups) this.applyPickups(s.pickups, fresh);
+};
+Coop.prototype.applyKeepers = function(list, fresh){
+  const g = this.game, P = g.P, myId = this.net.myId, self = this, seen = {};
+  list.forEach(function(k){
+    if(k.id === myId){
+      if(k.tp !== P.tp){ P.x = k.x; P.y = k.y; P.tp = k.tp; }
+      else if(!fresh && k.hp < P.hp - 2){
+        g.hurtT = 0.6; g.shake += 2.5; SFX.hurt();
+        g.burst(P.x, P.y, '#ff4d6d', 1, 10, 4, 0.5);
       }
-      Object.assign(m, sp);
+      P.hp = k.hp; P.oil = k.oil; P.surgeT = k.sg; P.surgeCdT = k.scd;
+      P.invulnT = k.iv; P.snuffT = k.sn; P.alive = !k.dead; P.respawnT = k.rs;
+      return;
     }
-  }, this);
-  g.enemies = (s.enemies || []).map(function(se){
-    const d = ENEMY_DEFS[se.type] || ENEMY_DEFS.shade;
-    return { type: se.type, d: d, x: se.x, y: se.y, hp: se.hp, maxHp: se.maxHp, r: se.r || d.r,
-      flash: se.flash || 0, seed: se.seed || 0, pat: se.pat || 'drift', patT: se.patT || 0,
-      tx: se.tx || 0, ty: se.ty || 0, dead: false, isBoss: !!se.isBoss, kb: { x: 0, y: 0 } };
+    seen[k.id] = true;
+    let m = self.mates.get(k.id);
+    if(!m){ m = self.newShell(k.id); self.mates.set(k.id, m); m.tp = -1; }
+    if(k.tp !== m.tp){ m.x = k.x; m.y = k.y; }
+    m.nx = k.x; m.ny = k.y; m.tp = k.tp;
+    m.aim = k.a; m.walk = k.w; m.hp = k.hp; m.oil = k.oil; m.flameOn = !!k.f;
+    m.surgeT = k.sg; m.invulnT = k.iv; m.snuffT = k.sn; m.alive = !k.dead; m.respawnT = k.rs;
   });
-  g.shots = (s.shots || []).map(function(ss){
-    return { x: ss.x, y: ss.y, vx: ss.vx, vy: ss.vy, r: ss.r, dmg: ss.dmg, life: ss.life, color: ss.color, kind: ss.kind, dead: false };
+  this.mates.forEach(function(m, id){ if(!seen[id]) self.mates.delete(id); });
+};
+Coop.prototype.applyEnemies = function(list, fresh){
+  const g = this.game, prev = this.enemyMap, next = new Map();
+  list.forEach(function(se){
+    let e = prev.get(se.id);
+    if(!e){
+      const d = ENEMY_DEFS[se.k] || ENEMY_DEFS.shade;
+      e = { id: se.id, type: se.k, d: d, r: d.r, isBoss: !!d.boss, seed: (se.id * 2.399) % 10,
+        x: se.x, y: se.y, pat: 'drift', tx: se.x, ty: se.y, kb: { x: 0, y: 0 }, dead: false };
+      if(!fresh) g.spawnFx(e);
+    }
+    e.nx = se.x; e.ny = se.y; e.hp = se.hp; e.maxHp = se.mh; e.flash = se.fl;
+    if(e.isBoss){ e.pat = se.pt; e.tx = se.tx; e.ty = se.ty; }
+    next.set(se.id, e);
   });
-  g.world.pickups = (s.pickups || []).map(function(sp){
-    return { type: sp.type, x: sp.x, y: sp.y, val: sp.val, t: sp.t || 0, taken: false };
-  });
-  if(s.state && s.state !== g.state && (s.state === 'playing')){
-    g.state = 'playing';
-    g.showScreen(null);
+  // The host only removes enemies when they die.
+  if(!fresh) prev.forEach(function(e, id){ if(!next.has(id)) g.killFx(e); });
+  this.enemyMap = next;
+  g.enemies = Array.from(next.values());
+};
+Coop.prototype.applyPickups = function(list, fresh){
+  const g = this.game, P = g.P, W = g.world;
+  const next = list.map(function(a){ return { type: a[0], x: a[1], y: a[2], val: a[3], t: a[4] }; });
+  if(!fresh){
+    const keep = {};
+    next.forEach(function(p){ keep[p.type + Math.round(p.x) + ',' + Math.round(p.y)] = true; });
+    W.pickups.forEach(function(p){
+      if(keep[p.type + Math.round(p.x) + ',' + Math.round(p.y)]) return;
+      g.pickupFx(p);
+      if(dist(P.x, P.y, p.x, p.y) > 60) return; // someone else took it
+      if(p.type === 'ember') SFX.pick();
+      else if(p.type === 'oil') SFX.oilPick();
+      else SFX.wickPick();
+    });
   }
+  W.pickups = next;
 };
-Coop.prototype.onUpgOpen = function(msg){
-  this.uiStatus('Host waehlt ein Team-Upgrade …');
-  this.game.toast('HOST CHOOSES A TEAM BOON');
+// Every frame on guests: ease shells toward the latest snapshot, fly shots on.
+Coop.prototype.smooth = function(dt){
+  const g = this.game, k = 1 - Math.exp(-15 * dt);
+  function ease(o){
+    if(Math.abs(o.nx - o.x) + Math.abs(o.ny - o.y) > 250){ o.x = o.nx; o.y = o.ny; }
+    else { o.x += (o.nx - o.x) * k; o.y += (o.ny - o.y) * k; }
+  }
+  this.mates.forEach(ease);
+  g.enemies.forEach(function(e){ ease(e); e.flash = Math.max(0, e.flash - dt); });
+  g.shots.forEach(function(s){ s.x += s.vx * dt; s.y += s.vy * dt; });
+  const P = g.P;
+  this.setBanner(this.hostState === 'pause' ? 'HOST PAUSED · THE DARK WAITS'
+    : P.alive === false ? 'YOU ARE DOWN · BACK IN ' + Math.ceil(P.respawnT || 0) + 's' : '');
 };
-Coop.prototype.onUpgPick = function(msg){
-  const u = (typeof UPGRADES !== 'undefined' ? UPGRADES : []).find(function(x){ return x.id === msg.id; });
-  if(!u) return;
-  this.game.applyUpgrade(u);
-  this.uiStatus('Team-Boon: ' + u.name);
-};
-Coop.prototype.onEndMsg = function(msg){
-  if(msg.kind === 'victory') this.game.victory();
-  else this.game.gameOver();
+Coop.prototype.setBanner = function(text){
+  if(text === this.banner) return;
+  this.banner = text;
+  const el = document.getElementById('coopBanner');
+  el.textContent = text;
+  el.classList.toggle('hidden', !text);
 };
 
-window.Coop = Coop;
-// Selbst-Diagnose: jeder JS-Fehler landet lesbar in der Co-op-Box (sticky)
+// Surface script errors in the lobby box: players often test without a console.
 window.addEventListener('error', function(e){
-  try{
-    window.__coopErr = true;
-    const el = document.getElementById('coopStatus');
-    if(el) el.textContent = 'JS-FEHLER: ' + (e.message || e.error) + ' @' + String(e.filename || '').split('/').pop() + ':' + (e.lineno || '?');
-  }catch(_){}
-});
-document.addEventListener('DOMContentLoaded', function(){
-  try{
-    if(typeof game !== 'undefined' && game && !game.coopUi){
-      game.coopUi = new Coop(game);
-      game.coopUi.wireUi();
-      game.coopUi.uiStatus('Bereit v5 — klicke Host Lobby.');
-    } else if(!window.__coopErr){
-      const el = document.getElementById('coopStatus');
-      if(el) el.textContent = 'FEHLER: Spiel-Objekt fehlt (game.js defekt?). Solo-Modus testen.';
-    }
-  }catch(e){ console.error('coop init', e); }
+  const el = document.getElementById('coopStatus');
+  if(el) el.textContent = 'JS-Fehler: ' + e.message + ' @' + String(e.filename || '').split('/').pop() + ':' + e.lineno;
 });

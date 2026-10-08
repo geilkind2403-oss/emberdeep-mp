@@ -1,12 +1,29 @@
-.coop-box{margin-top:18px;border:1px solid rgba(245,179,73,.35);border-radius:10px;
-  background:rgba(7,9,18,.85);padding:14px;max-width:420px;margin-left:auto;margin-right:auto}
-.coop-title{font-size:13px;letter-spacing:3px;color:#f5b349;margin-bottom:10px}
-.coop-row{display:flex;gap:8px;justify-content:center;align-items:center;margin:8px 0;flex-wrap:wrap}
+.coop-box{margin-top:14px;border:1px solid rgba(245,179,73,.35);border-radius:10px;
+  background:rgba(7,9,18,.85);padding:12px 14px;max-width:500px;margin-left:auto;margin-right:auto}
+.coop-title{font-size:13px;letter-spacing:3px;color:#f5b349;margin-bottom:6px}
+.coop-row{display:flex;gap:8px;justify-content:center;align-items:center;margin:6px 0;flex-wrap:wrap}
 .coop-box input{background:#0b101d;color:#efe8d2;border:1px solid rgba(255,255,255,.2);
   border-radius:6px;padding:8px 10px;font-size:14px}
 .coop-code{max-width:90px;text-transform:uppercase;text-align:center;letter-spacing:2px}
-.btn.small{padding:8px 14px;font-size:13px}
-.coop-invite{font:12px 'Courier New',monospace;color:#8b90a8;word-break:break-all;max-width:260px}
-.coop-players{list-style:none;margin:6px 0 0;padding:0;font-size:13px;color:#cfd3e6}
-.coop-players li{padding:2px 0}
+.btn.small{padding:8px 12px;font-size:12px;letter-spacing:1.2px;gap:8px}
+.coop-invite{font:12px 'Courier New',monospace;color:#8b90a8;letter-spacing:1px}
+.coop-invite b{color:#f5b349;font-size:15px;letter-spacing:3px}
+.coop-players{list-style:none;margin:4px 0 0;padding:0;font-size:13px;color:#cfd3e6;display:flex;flex-wrap:wrap;gap:4px 14px;justify-content:center}
+.coop-players:empty{display:none}
 .coop-status{font-size:12px;opacity:.7;margin-top:6px;min-height:16px}
+.coop-banner{position:absolute;top:165px;left:50%;transform:translateX(-50%);padding:9px 16px;border:1px solid #d4a85f66;
+  background:#0a1214e8;color:#ecd7b4;font:10px var(--mono);letter-spacing:2.5px;white-space:nowrap;animation:breathe 1.7s infinite}
+.guest-only{display:none}
+body.coop-guest .guest-only{display:block}
+body.coop-guest .host-only{display:none}
+.card:disabled{cursor:default}
+.card:disabled:hover{transform:none;border-color:#b8a27340;box-shadow:none}
+@media(max-width:760px){.coop-banner{top:220px;font-size:8px;letter-spacing:1px}}
+/* An open lobby makes the title column tall; tighten it on short desktop screens. */
+@media(min-width:761px) and (max-height:920px){
+  .title-content .logo{font-size:clamp(56px,6.2vw,96px);margin:16px 0 12px}
+  .title-content .title-rule{margin:12px 0}
+  .title-content .lore{line-height:1.6}
+  .title-content .tip{margin-top:8px}
+  .title-content .btn.big{padding:16px 24px}
+}

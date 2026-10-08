@@ -5,11 +5,9 @@ class SfxEngine {
     this.ctx = null;
     this.master = null;
     this.noiseBuf = null;
-    this.muted = false;
     this.last = {};
     this.flameSrc = null;
     this.flameGain = null;
-    this.flameFilt = null;
   }
   init(){
     if(this.ctx){
@@ -20,7 +18,7 @@ class SfxEngine {
     if(!AC) return;
     this.ctx = new AC();
     this.master = this.ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.5;
+    this.master.gain.value = 0.5;
     this.master.connect(this.ctx.destination);
     const len = this.ctx.sampleRate;
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -38,10 +36,6 @@ class SfxEngine {
     lfo.connect(lg); lg.connect(g.gain);
     o1.connect(g); o2.connect(g); g.connect(this.master);
     o1.start(); o2.start(); lfo.start();
-  }
-  setMuted(m){
-    this.muted = m;
-    if(this.master) this.master.gain.value = m ? 0 : 0.5;
   }
   gate(name, ms){
     const n = performance.now();
@@ -121,14 +115,14 @@ class SfxEngine {
     src.connect(f); f.connect(g); g.connect(this.master);
     src.start();
     g.gain.linearRampToValueAtTime(0.2, c.currentTime + 0.09);
-    this.flameSrc = src; this.flameGain = g; this.flameFilt = f;
+    this.flameSrc = src; this.flameGain = g;
   }
   flameOff(){
     if(!this.flameSrc || !this.ctx) return;
     const c = this.ctx, g = this.flameGain, s = this.flameSrc;
     g.gain.setTargetAtTime(0, c.currentTime, 0.05);
     setTimeout(function(){ try{ s.stop(); }catch(e){} }, 300);
-    this.flameSrc = null; this.flameGain = null; this.flameFilt = null;
+    this.flameSrc = null; this.flameGain = null;
   }
   gateOpen(){
     [262, 330, 392].forEach(function(f, i){
@@ -161,10 +155,6 @@ class SfxEngine {
     [262, 330, 392, 523, 659, 784].forEach(function(f, i){
       SFX.tone({ f: f, d: 0.32, v: 0.15, at: i * 0.11, type: 'triangle' });
     });
-  }
-  heart(){
-    this.tone({ f: 55, f2: 40, d: 0.15, v: 0.24 });
-    this.tone({ f: 55, f2: 42, d: 0.16, at: 0.18, v: 0.18 });
   }
 }
 window.SFX = new SfxEngine();
