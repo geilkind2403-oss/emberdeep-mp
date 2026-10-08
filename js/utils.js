@@ -4,10 +4,8 @@ const TAU = Math.PI * 2;
 function clamp(v, a, b){ return v < a ? a : v > b ? b : v; }
 function lerp(a, b, t){ return a + (b - a) * t; }
 function rand(a, b){ return a + Math.random() * (b - a); }
-function randInt(a, b){ return Math.floor(rand(a, b + 1)); }
 function pick(arr){ return arr[(Math.random() * arr.length) | 0]; }
 function dist(x1, y1, x2, y2){ return Math.hypot(x2 - x1, y2 - y1); }
-function angleTo(x1, y1, x2, y2){ return Math.atan2(y2 - y1, x2 - x1); }
 function angleDiff(a, b){
   let d = (a - b) % TAU;
   if(d > Math.PI) d -= TAU;
@@ -33,11 +31,6 @@ function overlapRects(a, b, pad){
   pad = pad || 0;
   return a.x < b.x + b.w + pad && a.x + a.w + pad > b.x &&
          a.y < b.y + b.h + pad && a.y + a.h + pad > b.y;
-}
-
-function pointInRect(x, y, rc, pad){
-  pad = pad || 0;
-  return x > rc.x - pad && x < rc.x + rc.w + pad && y > rc.y - pad && y < rc.y + rc.h + pad;
 }
 
 function resolveCircleRect(cx, cy, r, rc){
