@@ -138,6 +138,10 @@ class SfxEngine {
       SFX.tone({ f: f, d: 0.2, v: 0.1, at: i * 0.07, type: 'triangle' });
     });
   }
+  ability(){
+    this.tone({ f: 330, f2: 990, d: 0.25, v: 0.14, type: 'triangle' });
+    this.noiseHit({ f: 1200, f2: 300, d: 0.25, v: 0.1 });
+  }
   power(){
     [440, 554, 659, 880].forEach(function(f, i){
       SFX.tone({ f: f, f2: f * 1.5, d: 0.18, v: 0.1, at: i * 0.05, type: 'triangle' });

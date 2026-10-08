@@ -11,7 +11,9 @@
    Game messages (transport messages live in mp-net.js):
    host->guest: start | floor {floor, seed, keepers} | stats {keepers} | state {st, ...} |
                 upg-open {ids, secs} | end {kind} | title | say {msg}
-   guest->host: in {x, y, tp, mx, my, a, f, s, dt} | pick {id} */
+   host->guest also: fx {x, y, c, r} (ability rings)
+   guest->host: in {x, y, tp, mx, my, a, f, s, dt, e, cx, cy} | pick {id} */
+var COOP_SHOT_KINDS = ['orb', 'shard', 'fire'];
 
 var COOP_SNAP_MS = 66;      // ~15 snapshots per second
 var COOP_INPUT_MS = 33;     // ~30 inputs per second
@@ -34,6 +36,7 @@ function Coop(game){
   this.stats = {};            // guest: id -> keeper stats from the last floor message
   this.fresh = false;         // guest: next snapshot is the first of a floor (no fx)
   this.surgeTap = false;      // guest: remembers taps shorter than one input interval
+  this.abilityTap = false;
   this.banner = '';
   this.net = new MPNet({
     status: function(s){ self.uiStatus(s); },
@@ -48,6 +51,12 @@ function Coop(game){
   window.addEventListener('pagehide', function(){ self.net.leave(); });
 }
 Coop.prototype.active = function(){ return this.game.coop === this; };
+Coop.prototype.onClassChanged = function(cls){
+  if(this.net.connected()) this.net.setClass(cls);
+};
+Coop.prototype.broadcastFx = function(x, y, color, r){
+  this.net.broadcast({ t: 'fx', x: Math.round(x), y: Math.round(y), c: color, r: r });
+};
 Coop.prototype.say = function(msg){
   this.game.toast(msg);
   if(this.isHost) this.net.broadcast({ t: 'say', msg: msg });
@@ -79,7 +88,8 @@ Coop.prototype.refreshUi = function(){
   u.players.innerHTML = '';
   net.players.forEach(function(p, i){
     const li = document.createElement('li');
-    li.textContent = p.name + (i === 0 ? ' (Host)' : '') + (p.id === net.myId ? ' · you' : '');
+    li.textContent = (CLASSES[p.cls] || CLASSES.keeper).icon + ' ' + p.name + (i === 0 ? ' (Host)' : '') + (p.id === net.myId ? ' · you' : '');
+    li.title = (CLASSES[p.cls] || CLASSES.keeper).name;
     li.style.color = p.color;
     u.players.appendChild(li);
   });
@@ -95,11 +105,9 @@ Coop.prototype.onLobby = function(info){
     });
     return;
   }
-  const scale = teamScale(info.players.length);
-  const hard = info.players.length > 1 ? ' Gegner: ×' + scale.hp.toFixed(2) + ' Leben, ×' + scale.count.toFixed(1) + ' Anzahl.' : '';
-  this.uiStatus((info.isHost
-    ? 'Lobby ' + info.code + ' offen (' + info.players.length + '/' + MP_MAX_PLAYERS + ') — schick den Invite-Link an deine Keeper.'
-    : 'Verbunden mit Lobby ' + info.code + ' — warte auf den Host.') + hard);
+  const n = info.players.length, scale = teamScale(n);
+  const hard = n > 1 ? ' · Gegner ×' + scale.hp.toFixed(2) + ' Leben, ×' + scale.count.toFixed(1) + ' Anzahl' : ' · teile den Invite-Link';
+  this.uiStatus((info.isHost ? 'Lobby offen (' + n + '/' + MP_MAX_PLAYERS + ')' : 'Verbunden (' + n + '/' + MP_MAX_PLAYERS + ') · warte auf den Host') + hard);
 };
 Coop.prototype.wireUi = function(){
   const self = this, u = this.ui();
@@ -114,10 +122,10 @@ Coop.prototype.wireUi = function(){
   function join(){
     const code = mpNormCode(u.code.value);
     if(code.length !== 6){ self.uiStatus('Code muss 6 Zeichen haben.'); return; }
-    withPeer(function(){ self.isHost = false; self.net.join(code, self.myName()); });
+    withPeer(function(){ self.isHost = false; self.net.join(code, self.myName(), self.game.cls); });
   }
   u.host.addEventListener('click', function(){
-    withPeer(function(){ self.isHost = true; self.net.host(self.myName()); });
+    withPeer(function(){ self.isHost = true; self.net.host(self.myName(), self.game.cls); });
   });
   u.join.addEventListener('click', join);
   u.code.addEventListener('keydown', function(e){ if(e.key === 'Enter') join(); });
@@ -134,7 +142,10 @@ Coop.prototype.wireUi = function(){
     self.refreshUi();
     self.uiStatus('Lobby verlassen.');
   });
-  window.addEventListener('keydown', function(e){ if(e.code === 'Space') self.surgeTap = true; });
+  window.addEventListener('keydown', function(e){
+    if(e.code === 'Space') self.surgeTap = true;
+    if(e.code === 'KeyE') self.abilityTap = true;
+  });
   const m = /[?&]room=([A-Za-z0-9]{6})/i.exec(location.search);
   if(m){
     u.code.value = m[1].toUpperCase();
@@ -201,7 +212,7 @@ Coop.prototype.syncMates = function(){
     seen[p.id] = true;
     let m = self.mates.get(p.id);
     if(!m){
-      m = g.makePlayer();
+      m = g.makePlayer(p.cls);
       m.id = p.id;
       self.mates.set(p.id, m);
     }
@@ -231,7 +242,7 @@ Coop.prototype.onPeerLeft = function(id){
   this.game.checkTeamWipe();
 };
 Coop.prototype.keeperStats = function(p){
-  return { id: p.id, x: Math.round(p.x), y: Math.round(p.y), tp: p.tp, upg: p.upg,
+  return { id: p.id, x: Math.round(p.x), y: Math.round(p.y), tp: p.tp, upg: p.upg, cls: p.cls,
     speed: p.speed, lightR: p.lightR, maxHp: p.maxHp, maxOil: p.maxOil,
     flame: { range: p.flame.range, half: p.flame.half },
     surge: { r: p.surge.r, cd: p.surge.cd },
@@ -313,6 +324,7 @@ Coop.prototype.inputFor = function(m){
   const placed = inp.tp === m.tp;
   return { mx: live ? inp.mx : 0, my: live ? inp.my : 0, aim: inp.a,
     fire: live && !!inp.f, surge: live && !!inp.s, dashT: live ? inp.dt : 0,
+    ability: live && !!inp.e, tx: inp.cx, ty: inp.cy,
     x: placed ? inp.x : undefined, y: placed ? inp.y : undefined };
 };
 Coop.prototype.snapshot = function(){
@@ -323,7 +335,7 @@ Coop.prototype.snapshot = function(){
     gate: W.gateOpen ? 1 : 0, left: W.spawnsLeft,
     keepers: g.allPlayers().map(function(p){
       return { id: p.id, x: r(p.x), y: r(p.y), a: r2(p.aim), w: r1(p.walk || 0), hp: r1(p.hp), oil: r1(p.oil),
-        f: p.flameOn ? 1 : 0, sg: r2(p.surgeT), scd: r1(p.surgeCdT), iv: r1(p.invulnT), sn: r1(p.snuffT || 0),
+        f: p.flameOn ? 1 : 0, sg: r2(p.surgeT), scd: r1(p.surgeCdT), ecd: r1(p.eCdT || 0), iv: r1(p.invulnT), sn: r1(p.snuffT || 0),
         dead: p.alive === false ? 1 : 0, tp: p.tp, bf: roundBuffs(p.buffs) };
     }),
     enemies: g.enemies.map(function(e){
@@ -331,7 +343,8 @@ Coop.prototype.snapshot = function(){
       if(e.isBoss){ o.pt = e.pat; o.tx = r(e.tx); o.ty = r(e.ty); }
       return o;
     }),
-    shots: g.shots.map(function(s){ return [r(s.x), r(s.y), r(s.vx), r(s.vy), s.r, s.kind === 'shard' ? 1 : 0, s.color]; }),
+    shots: g.shots.map(function(s){ return [r(s.x), r(s.y), r(s.vx), r(s.vy), s.r, COOP_SHOT_KINDS.indexOf(s.kind), s.color]; }),
+    zones: g.zones.map(function(z){ return [r(z.x), r(z.y), z.r, r1(z.t), z.max]; }),
     vents: W.vents.map(function(v){ return [v.active ? 1 : 0, r(v.fuel), r1(v.refillT || 0)]; })
   };
   const sig = W.pickups.length + ':' + W.pickups.reduce(function(a, p){ return a + p.x * 3 + p.y; }, 0);
@@ -365,9 +378,11 @@ Coop.prototype.sendInput = function(){
   const g = this.game, P = g.P, k = g.keys;
   if(!P) return;
   const live = g.state === 'playing' && this.hostState === 'playing' && P.alive !== false;
-  const surge = live && (!!k.Space || this.surgeTap);
-  this.surgeTap = false;
+  const surge = live && (!!k.Space || this.surgeTap), ability = live && (!!k.KeyE || this.abilityTap);
+  this.surgeTap = this.abilityTap = false;
+  const o = g.cameraOrigin();
   this.net.send({ t: 'in', x: Math.round(P.x), y: Math.round(P.y), tp: P.tp,
+    e: ability ? 1 : 0, cx: Math.round(g.mouse.x + o.x), cy: Math.round(g.mouse.y + o.y),
     mx: live ? (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) : 0,
     my: live ? (k.KeyS ? 1 : 0) - (k.KeyW ? 1 : 0) : 0,
     a: Math.round(P.aim * 100) / 100, f: live && P.flameOn ? 1 : 0, s: surge ? 1 : 0,
@@ -396,6 +411,11 @@ Coop.prototype.onMessage = function(msg, from){
     this.uiStatus('Der Host ist zurück in der Lobby — warte auf den nächsten Start.');
   }
   else if(msg.t === 'say') g.toast(msg.msg || '');
+  else if(msg.t === 'fx'){
+    g.effect(msg.x, msg.y, msg.c, msg.r);
+    g.burst(msg.x, msg.y, msg.c, 1.2, 18, 4, 0.7);
+    if(g.P && dist(g.P.x, g.P.y, msg.x, msg.y) < 700) SFX.ability();
+  }
 };
 Coop.prototype.beginGuestRun = function(){
   const g = this.game;
@@ -412,6 +432,7 @@ Coop.prototype.beginGuestRun = function(){
 };
 Coop.prototype.applyStats = function(p, st){
   p.upg = st.upg || {};
+  p.cls = st.cls || 'keeper';
   p.speed = st.speed; p.lightR = st.lightR; p.maxHp = st.maxHp; p.maxOil = st.maxOil;
   Object.assign(p.flame, st.flame); Object.assign(p.surge, st.surge); Object.assign(p.dash, st.dash);
 };
@@ -472,7 +493,10 @@ Coop.prototype.applyState = function(s){
   this.applyKeepers(s.keepers, fresh);
   this.applyEnemies(s.enemies, fresh);
   g.shots = s.shots.map(function(a){
-    return { x: a[0], y: a[1], vx: a[2], vy: a[3], r: a[4], kind: a[5] ? 'shard' : 'orb', color: a[6], dead: false };
+    return { x: a[0], y: a[1], vx: a[2], vy: a[3], r: a[4], kind: COOP_SHOT_KINDS[a[5]] || 'orb', color: a[6], dead: false };
+  });
+  g.zones = (s.zones || []).map(function(a){
+    return { kind: 'flare', x: a[0], y: a[1], r: a[2], t: a[3], max: a[4] };
   });
   s.vents.forEach(function(a, i){
     const v = W.vents[i];
@@ -495,7 +519,7 @@ Coop.prototype.applyKeepers = function(list, fresh){
         g.toast(POWERUPS[b].name);
       }
       P.hp = k.hp; P.oil = k.oil; P.surgeT = k.sg; P.surgeCdT = k.scd;
-      P.invulnT = k.iv; P.snuffT = k.sn; P.alive = !k.dead; P.buffs = k.bf;
+      P.invulnT = k.iv; P.snuffT = k.sn; P.alive = !k.dead; P.buffs = k.bf; P.eCdT = k.ecd;
       return;
     }
     seen[k.id] = true;
