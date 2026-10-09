@@ -1,0 +1,44 @@
+/* Keeper progression: skill tree screen, title button, HUD ultimate. */
+.tree-pick{margin-top:8px;color:#b9cfc2;border-bottom-color:#7f9a8b66}
+.tree-pick.has-points{color:#ffd99a;animation:breathe 1.8s infinite}
+#screen-tree{gap:16px;justify-content:flex-start;padding-top:48px}
+#screen-tree .section-sigil{font-size:40px}
+.tree-tabs{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.tree-tab{cursor:pointer;position:relative;background:transparent;border:1px solid #8e704755;color:#98a5a2;font:10px var(--mono);letter-spacing:1.5px;padding:8px 12px}
+.tree-tab:hover{color:var(--paper);border-color:#ebc58a}
+.tree-tab.on{color:#f1d6a6;border-color:var(--amber);background:#c191441c}
+.tree-tab.has-points:after{content:'';position:absolute;top:-4px;right:-4px;width:7px;height:7px;background:var(--amber);transform:rotate(45deg);box-shadow:0 0 10px #e8b563}
+.tree-xp{width:min(560px,100%)}
+.tree-xp .bar{height:6px}
+#treeXpFill{background:linear-gradient(90deg,#9b6b34,#f0ca83)}
+.tree-xp-row{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:9px;font:10px var(--mono);letter-spacing:1.5px;color:#8f9e9a}
+.tree-xp-row b{font-weight:normal;color:var(--amber)}
+.tree-cols{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;width:100%;max-width:1060px}
+.tree-col{flex:1 1 280px;max-width:330px;display:flex;flex-direction:column}
+.tree-head{display:flex;justify-content:space-between;align-items:center;font:10px var(--mono);letter-spacing:3px;color:var(--amber);padding:0 4px 10px;margin-bottom:12px;border-bottom:1px solid var(--line)}
+.tree-node{position:relative;display:flex;flex-direction:column;gap:8px;text-align:left;cursor:pointer;color:var(--paper);padding:13px 15px;background:linear-gradient(145deg,#1a292a99,#091113ee);border:1px solid #b8a27340;transition:border-color .2s,box-shadow .2s,transform .2s}
+.tree-node+.tree-node{margin-top:22px}
+.tree-node+.tree-node:before{content:'';position:absolute;left:50%;top:-23px;height:22px;border-left:1px dashed #b8a27355}
+.tree-node-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.tree-node b{font-weight:normal;font-size:15px;letter-spacing:.5px;color:#edd3a6}
+.tree-node .pips{margin:0;padding:0}
+.tree-desc{font:11px/1.6 var(--mono);color:#a9b8b0}
+.tree-node.unlock{border-color:#d7b06a66}
+.tree-node.unlock b{color:#ffd99a}
+.tree-node.can{border-color:var(--amber);box-shadow:0 0 26px #d49c4322}
+.tree-node.can:hover{transform:translateY(-2px);box-shadow:0 0 36px #d49c4340;background:linear-gradient(145deg,#2a3530cc,#0b1514ee)}
+.tree-node.maxed{border-color:#e8bf6590;background:linear-gradient(145deg,#3a301c88,#0b1311ee)}
+.tree-node.locked{opacity:.38}
+.tree-node:disabled{cursor:default}
+.tree-skins-wrap{display:flex;flex-direction:column;align-items:center;gap:10px}
+.tree-skins{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.skin{cursor:pointer;display:flex;align-items:center;gap:9px;background:transparent;border:1px solid #8e704755;color:#c9c4b0;font:9px var(--mono);letter-spacing:1.5px;padding:7px 11px}
+.skin .swatch{display:block;width:16px;height:16px;transform:rotate(45deg);border:1px solid #ffffff30}
+.skin.on{border-color:var(--amber);color:#ffd99a;box-shadow:0 0 18px #d49c4330}
+.skin.locked{opacity:.4;cursor:default}
+.skin:not(.locked):hover{border-color:#ebc58a}
+#btnTreeReset:disabled{opacity:.35;cursor:default;transform:none;box-shadow:none}
+/* The ultimate pip glows once it is charged. */
+.ability.ult .pipfill{background:linear-gradient(0deg,#ffc95b55,#ffe39b14)}
+.ability.ult .pip.ready{border-color:#ffe39b;box-shadow:0 0 28px #ffd36b66,inset 0 0 18px #ffd36b33;animation:breathe 1.2s infinite}
+@media(max-width:760px){.tree-col{flex-basis:100%}.tree-tab{font-size:9px;padding:7px 9px}#screen-tree{padding-top:70px}}

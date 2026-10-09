@@ -92,6 +92,12 @@ const POWERUPS = {
   nova:   { name: 'SUNBURST',   desc: 'One blast of the old sun',  dur: 0,  color: '#ffd98a', icon: '✹' }
 };
 const POWER_KINDS = Object.keys(POWERUPS);
+// Timed states granted by skills rather than picked up.
+const STATUS_FX = {
+  dawn:  { name: 'DAWNBREAK', color: '#ffe08a', icon: '☀' },
+  night: { name: 'NIGHTFALL', color: '#b18cff', icon: '☾' }
+};
+function buffDef(kind){ return POWERUPS[kind] || STATUS_FX[kind] || { name: String(kind).toUpperCase(), color: '#ffffff', icon: '✦' }; }
 
 // Co-op difficulty: every keeper beyond the first makes the deep harder.
 function teamScale(keepers){

@@ -37,9 +37,15 @@ class Enemy {
     this.tx = x; this.ty = y;
     this.chargeV = { x: 0, y: 0 };
     this.phase = 1;
+    this.stunT = 0;  // skill statuses: stunned, burning, slowed
+    this.burnT = 0;
+    this.burnDps = 0;
+    this.burnBy = null;
+    this.slowT = 0;
   }
 
   moveToward(ang, sp, dt){
+    if(this.slowT > 0) sp *= 0.5;
     this.x += Math.cos(ang) * sp * dt + this.kb.x * dt;
     this.y += Math.sin(ang) * sp * dt + this.kb.y * dt;
   }
@@ -131,11 +137,23 @@ class Enemy {
     this.flash = Math.max(0, this.flash - dt);
     const k = Math.exp(-5 * dt);
     this.kb.x *= k; this.kb.y *= k;
+    this.slowT -= dt;
+    if(this.burnT > 0){
+      this.burnT -= dt;
+      this.hp -= this.burnDps * dt;
+      this.flash = Math.max(this.flash, 0.1);
+      if(this.hp <= 0){ G.killEnemy(this, this.burnBy); return; }
+    }
 
     const dx = P.x - this.x, dy = P.y - this.y;
     let d = Math.hypot(dx, dy) || 1;
+    const stunned = this.stunT > 0;
 
-    if(this.isBoss){
+    if(stunned){
+      this.stunT -= dt;
+      this.x += this.kb.x * dt;
+      this.y += this.kb.y * dt;
+    } else if(this.isBoss){
       this.bossAI(dt, G);
     } else {
       const ang = Math.atan2(dy, dx) + Math.sin(G.t * 1.3 + this.seed) * 0.55;
@@ -159,12 +177,12 @@ class Enemy {
 
     const lightR = P.lightR * G.lightMult(P);
     if(P.oil > 0 && d < lightR + this.r * 0.5){
-      this.hp -= P.burn * dt;
+      this.hp -= P.burn * (P.buffs && P.buffs.dawn > 0 ? P.dawnBurn : 1) * dt;
       this.flash = Math.max(this.flash, 0.25);
       if(this.hp <= 0){ G.killEnemy(this, P); return; }
     }
 
-    if(d < this.r + 15){
+    if(!stunned && d < this.r + 15){
       G.damagePlayer(this.dmg, this, P);
     }
   }
