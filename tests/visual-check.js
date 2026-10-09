@@ -111,6 +111,130 @@
     game.startRun();game.nextFloor();
     check('Each floor cleared adds XP',Progress.of('keeper').xp===450+XP_PER_FLOOR);
     game.best=savedBest;
+    // ---- The Warden (floor 10) ----
+    const memSave=WardenMemory.save;WardenMemory.save=function(){};
+    const arenaRun=cls=>{game.cls=cls||'keeper';game.startRun();game.floor=9;game.P=null;game.nextFloor();return game.warden;};
+    const toPhase=(V,ph)=>{const B=V.brain;game.P.y=1300;B.encounterStart(game.P);B.seq=[];B.seqDone=null;game.clearTalk();V.boxOn=true;B.beginPhase(ph);return B;};
+    const until=(cond,max,each)=>{for(let i=0;i<(max||6000)&&game.state==='playing';i++){if(each)each();game.update(1/60);if(cond())return true;}return false;};
+    const ga=JSON.stringify(generateFloor(10,new Rng(77))),gb=JSON.stringify(generateFloor(10,new Rng(77))),A10=generateFloor(10,new Rng(77));
+    check('Warden arena is deterministic and complete',ga===gb&&A10.arena&&A10.obstacles.filter(o=>o.dyn).length===8&&A10.vents.length===5&&A10.arena.candles.length===16&&A10.initial===0&&A10.spawn.y>A10.arena.corridor.y&&!generateFloor(20,new Rng(77)).arena);
+    const pt={x:900,y:100};arenaClamp(A10,pt,13);const pc={x:900,y:2000};arenaClamp(A10,pc,13);const okCorr=pc.y===2000;A10.arena.sealed=true;arenaClamp(A10,pc,13);
+    check('Arena keeps keepers on the floor and seals the corridor',dist(pt.x,pt.y,900,860)<=607.5&&okCorr&&dist(pc.x,pc.y,900,860)<=607.5);
+    const kinds=[[WK.RING,[4,1.25,28,4,40,150,7,0,0,1,30,0.6]],[WK.WALLS,[220,26,3,0.8,90,1,2.4,0,1,4.0,45,1]],[WK.KEYS,[10,60]],[WK.CHARGE,[300,700,1.0]],
+      [WK.BEAMS,[0.9,0.4,48,2,700,500,40,1100,500,140]],[WK.CAGE,[320,176,4,2,1,8,0.75,150,4.6,110,60]],[WK.BANDS,[50,170,14,50,2,0.8,1,30,1.3,2,67]],
+      [WK.EYES,[36,3,10,130,250,70,0.08,1.2]],[WK.FAN,[0.7,3,8,230,7]],[WK.SPIRAL,[3,45,2,-45,0.2,165,40,3,0.4,3,1]],[WK.HAND,[0.9,110,12,150]],[WK.GONER,[320,110,120/110,24,2,4.6,32,4,190,4,110]]];
+    let detOk=true;const tmpP={x:0,y:0};
+    kinds.forEach(([k,q])=>{
+      const d={id:1,k:k,s:12345,t0:0,x:900,y:860,a:30,R:320,pm:255,v:100,q:q},p1=buildPattern(d),p2=buildPattern(JSON.parse(JSON.stringify(d)));
+      if(p1.b.length>200||p1.dur>16||JSON.stringify(p1.h)!==JSON.stringify(p2.h))detOk=false;
+      [0.3,1,2,4,8].forEach(u=>p1.b.forEach((b,i)=>{if(u<b.ts||u>=b.te)return;bulletPos(b,u,tmpP);const x1=tmpP.x,y1=tmpP.y;bulletPos(p2.b[i],u,tmpP);if(!isFinite(x1)||x1!==tmpP.x||y1!==tmpP.y)detOk=false;}));
+    });
+    check('Every Warden pattern is deterministic and bounded',detOk);
+    const bell=buildPattern({id:1,k:WK.RING,s:1,t0:0,x:900,y:860,a:0,R:320,pm:0,v:100,q:[1,1,28,4,0,150,7,0,0,0,30,0]});
+    const angs=bell.b.map(b=>Math.atan2(b.vy,b.vx)).sort((x,y)=>x-y);let gap=0;for(let i=0;i<angs.length;i++){const nx=i+1<angs.length?angs[i+1]:angs[0]+TAU;gap=Math.max(gap,nx-angs[i]);}
+    check('Bell rings leave a gap a keeper fits through',gap*150-2*(7+9)>=70&&kinds.filter(k=>k[0]===WK.BEAMS).every(k=>k[1][0]>=0.6));
+    let V=arenaRun('keeper'),B=toPhase(V,1);const KW=game.P;
+    const blue={id:900,k:WK.WALLS,s:1,t0:V.bt,x:900,y:860,a:0,R:320,pm:0,v:100,q:[220,26,1,0,0,1]};V.addPattern(blue);
+    const wall=V.pats.get(900).p.h[0];KW.x=900;KW.y=860;KW.invulnT=0;KW.dashT=0;KW.owT=0;KW._wHit=null;KW._wViol=null;
+    const tCross=V.bt+(0-wall.d0)/wall.vd;let hitsMove=0,hitsStill=0;
+    V.bt=tCross-0.05;for(let i=0;i<8;i++){V.checkHits(KW,true,1/60,()=>hitsMove++);V.bt+=1/60;}
+    KW._wHit=null;KW._wViol=null;KW.owT=0;V.bt=tCross-0.05;for(let i=0;i<8;i++){V.checkHits(KW,false,1/60,()=>hitsStill++);V.bt+=1/60;}
+    const orange={id:901,k:WK.WALLS,s:1,t0:V.bt,x:900,y:860,a:0,R:320,pm:0,v:100,q:[220,26,1,0,0,2]};V.addPattern(orange);V.pats.delete(900);
+    let oMove=0,oStill=0;const t2=V.bt+(320+20)/220;
+    KW._wHit=null;KW._wViol=null;KW.owT=0;V.bt=t2-0.05;for(let i=0;i<8;i++){V.checkHits(KW,true,1/60,()=>oMove++);V.bt+=1/60;}
+    KW._wHit=null;KW._wViol=null;KW.owT=0;V.bt=t2-0.05;for(let i=0;i<8;i++){V.checkHits(KW,false,1/60,()=>oStill++);V.bt+=1/60;}
+    check('Blue hurts only the moving, orange only the still',hitsMove===1&&hitsStill===0&&oMove===0&&oStill===1);
+    V.pats.clear();
+    let clashFree=true;
+    for(let sd=1;sd<=10;sd++){
+      const r=new Rng(sd*77),base=r.range(0,360),cols=[1,1,2,1,2,2,1,2,1,2,2,1],walls=[];
+      for(let j=0;j<12;j++)walls.push([1+j*0.8,(base+j*45)%360,cols[j]]);
+      resolveColorClashes(walls,256,380);
+      const L=276,span=2*L/380;
+      for(let t=0;t<12&&clashFree;t+=1/20){for(let gx=-240;gx<=240&&clashFree;gx+=40)for(let gy=-240;gy<=240;gy+=40){if(gx*gx+gy*gy>230*230)continue;let bl=false,or=false;
+        walls.forEach(w=>{const u=t-w[0];if(u<0||u>span)return;const a=w[1]*Math.PI/180;if(Math.abs(gx*Math.cos(a)+gy*Math.sin(a)+L-380*u)<26){if(w[2]===1)bl=true;else or=true;}});
+        if(bl&&or){clashFree=false;break;}}}
+    }
+    check('Hush and Ember never asks to be still and moving at once',clashFree);
+    V=arenaRun('keeper');B=V.brain;game.P.y=1300;B.encounterStart(game.P);until(()=>V.s===WS.TALK,600);
+    const hpT=B.e.hp;game.hurtEnemy(B.e,5000,'flame',game.P);
+    check('The Warden cannot be hurt while he talks',B.e.hp===hpT&&V.calm()&&V.locksActions());
+    B.seq=[];B.seqDone=null;game.clearTalk();B.beginPhase(1);
+    until(()=>V.s===WS.OPENING,3000,()=>{game.P.invulnT=1;});
+    game.hurtEnemy(B.e,1e6,'flame',game.P);
+    check('A phase holds until all its attacks were shown',Math.round(B.e.hp)===Math.round(B.e.maxHp*0.7)&&V.ph===1);
+    until(()=>V.s===WS.SHIFT,9000,()=>{game.P.invulnT=1;game.P.hp=game.P.maxHp;if(V.s===WS.OPENING)game.hurtEnemy(B.e,1e6,'flame',game.P);});
+    game.P.ult=100;game.P.ultOn=true;game.keys={KeyQ:true};game.update(1/60);game.keys={};
+    check('Ultimates wait during scenes',V.s===WS.SHIFT&&game.P.ult>=99);
+    until(()=>V.s===WS.ATTACK&&V.ph===2,4000,()=>{game.P.invulnT=1;});
+    const pillars=game.world.obstacles.filter(o=>o.pillar!==undefined).length;
+    const br=game.world.arena.braziers[0];br.lit=false;br.prog=0;const PK=game.P;PK.oil=PK.maxOil;
+    for(let i=0;i<70;i++){PK.x=br.x-60;PK.y=br.y;PK.invulnT=1;game.mouse.down=true;game.mouse.x=br.x-game.cameraOrigin().x;game.mouse.y=br.y-game.cameraOrigin().y;game.update(1/60);}
+    game.mouse.down=false;
+    check('Pillars burst between phases; a second of flame relights a brazier',V.A.pm===85&&pillars===4&&br.lit);
+    // Network: the Warden block stays small and guests rebuild the same bullets.
+    V=arenaRun('keeper');B=toPhase(V,3);B.prog=null;B.startAttack('VIGIL');
+    until(()=>V.bt-V.sb>4.5,600,()=>{game.P.invulnT=1;});
+    const snap=Coop.prototype.snapshot.call({game:game,pickupSig:'x'}),wbLen=JSON.stringify(snap.wb).length;
+    const ghost=new WardenView(game);ghost.apply(JSON.parse(JSON.stringify(snap.wb)));ghost.bt=V.bt;
+    let same=true,count=0;V.pats.forEach((P,id)=>{const G2=ghost.pats.get(id);if(!G2){same=false;return;}const u=V.bt-P.d.t0;P.p.b.forEach((b,i)=>{if(u<b.ts||u>=b.te)return;count++;bulletPos(b,u,tmpP);const x=tmpP.x,y=tmpP.y;bulletPos(G2.p.b[i],u,tmpP);if(Math.abs(x-tmpP.x)>0.5||Math.abs(y-tmpP.y)>0.5)same=false;});});
+    check('Warden sync stays small and guests rebuild the same bullets',wbLen<1500&&same&&count>20);
+    results.push('Warden snapshot block: '+wbLen+' bytes for '+count+' live bullets');
+    // Guest hit reports are checked against the host's own patterns.
+    const mate=game.makePlayer('keeper');mate.id='g1';mate.x=900;mate.y=860;mate.invulnT=0;mate.owT=0;mate.alive=true;
+    const pid=[...V.pats.keys()][0];const hpM=mate.hp;B.onGuestHit(mate,pid,-1-999);const bad=mate.hp;
+    const live=V.pats.get(pid).p.b.findIndex(b=>V.bt-V.pats.get(pid).d.t0>=b.ts&&V.bt-V.pats.get(pid).d.t0<b.te);B.onGuestHit(mate,pid,live);
+    check('Guest hit reports are validated by the host',bad===hpM&&mate.hp<hpM);
+    // RESOLVE: one checkpoint per fight in solo.
+    V=arenaRun('keeper');B=toPhase(V,2);B.e.hp=Math.round(B.e.maxHp*0.7);const hpStart=B.e.hp;B.e.hp-=200;
+    game.P.invulnT=0;game.P.dashT=0;B.v=100;V.s=WS.ATTACK;game.damagePlayer(9999,null,game.P);
+    const inResolve=V.s===WS.RESOLVE&&game.state==='playing';until(()=>V.s!==WS.RESOLVE,400);
+    const restarted=V.ph===2&&Math.round(B.e.hp)===Math.round(hpStart)&&game.P.hp===game.P.maxHp;
+    V.s=WS.ATTACK;game.P.invulnT=0;game.P.dashT=0;game.damagePlayer(99999,null,game.P);
+    check('RESOLVE restarts the phase once; the second fall is the end',inResolve&&restarted&&game.state==='over');
+    // Fake death: the gate stays shut and the victory screen is a lie.
+    V=arenaRun('keeper');B=toPhase(V,3);B.cycleShown=true;B.cycleDone=true;B.tollDone=true;B.e.hp=1;B.fakeStart();
+    until(()=>V.bt-V.sb>2.6,300);
+    const fv=document.getElementById('fakeVictory');
+    check('The Warden falls... but the stair stays shut',V.s===WS.FAKE&&!game.world.gateOpen&&game.enemies.includes(B.e)&&game.state==='playing'&&!fv.classList.contains('hidden'));
+    until(()=>V.s===WS.KINDLE,2400);
+    check('The fake victory screen shatters into the last phase',fv.classList.contains('hidden')&&V.s===WS.KINDLE&&V.so.length>=7);
+    // Kindling: hold your light to a soul.
+    const pos={x:0,y:0};let lit0=V.so.filter(s=>s[1]===1).length;
+    for(let i=0;i<140;i++){V.soulPos(0,pos);game.P.x=pos.x;game.P.y=pos.y;game.P.oil=game.P.maxOil;game.P.invulnT=1;game.update(1/60);}
+    check('Holding your light to a soul kindles it',V.so[0][1]===1&&V.so.filter(s=>s[1]===1).length>lit0);
+    game.P.invulnT=0;game.P.dashT=0;game.P.owT=0;game.damagePlayer(game.P.hp+50,null,game.P);
+    const refused=game.P.hp===1&&game.P.invulnT>=1.9&&V.s===WS.KINDLE;
+    check('* But it refused.',refused);
+    // Mercy and the two endings.
+    const mercy=(strike)=>{
+      const V2=arenaRun('keeper'),B2=toPhase(V2,3);B2.kindleStart();V2.so.forEach(s=>{s[0]=100;s[1]=1;});game.update(1/60);
+      until(()=>V2.s===WS.MERCY&&(V2.fl&64),3000,()=>{game.P.invulnT=1;});
+      const xp0=game.runXp();
+      until(()=>V2.s!==WS.MERCY,600,()=>{const P=game.P;P.x=WARDEN.C.x+40;P.y=WARDEN.C.y;P.oil=P.maxOil;game.mouse.down=!!strike;P.aim=Math.PI;game.mouse.x=WARDEN.C.x-game.cameraOrigin().x;game.mouse.y=WARDEN.C.y-game.cameraOrigin().y;});
+      game.mouse.down=false;
+      const ending=V2.en;until(()=>game.world.gateOpen,2400);
+      const xpGain=game.runXp()-xp0;game.P.x=game.world.gate.x;game.P.y=game.world.gate.y;game.update(1/60);
+      return {ending,xpGain,title:document.getElementById('vicTitle').textContent,state:game.state};
+    };
+    const sp=mercy(false);
+    check('Standing with him in silence spares him',sp.ending==='spared'&&sp.state==='victory'&&sp.title==='THE WARDEN RESTS'&&sp.xpGain>=1050);
+    const sl=mercy(true);
+    check('One breath of flame ends him',sl.ending==='slain'&&sl.state==='victory'&&sl.title==='THE WARDEN FALLS');
+    // The whole fight, start to finish, without a single NaN.
+    V=arenaRun('nightblade');B=V.brain;const seenStates=new Set();let nan=false;
+    until(()=>game.state!=='playing',60*900,()=>{
+      const P=game.P;P.invulnT=1;P.hp=P.maxHp;P.oil=P.maxOil;seenStates.add(V.s);
+      if(V.s===WS.DORMANT)P.y-=8;
+      if(V.s===WS.OPENING)game.hurtEnemy(B.e,500,'flame',P);
+      if(V.s===WS.KINDLE){const i=V.so.findIndex(s=>s[1]!==1);if(i>=0){V.soulPos(i,pos);P.x=pos.x;P.y=pos.y;}}
+      if(V.s===WS.MERCY){P.x=WARDEN.C.x+40;P.y=WARDEN.C.y;}
+      if(V.s===WS.GONE){P.x=game.world.gate.x;P.y=game.world.gate.y;}
+      if(!isFinite(B.e.x)||!isFinite(B.e.hp)||!isFinite(P.x))nan=true;
+      if(game.t%1<1/60)game.R.render(game,1/60);
+    });
+    check('The whole Warden fight runs from the corridor to the stair',!nan&&game.state==='victory'&&[WS.ENCOUNTER,WS.TALK,WS.ATTACK,WS.OPENING,WS.SHIFT,WS.FAKE,WS.RISE,WS.KINDLE,WS.MERCY,WS.SPARED,WS.GONE].every(s=>seenStates.has(s))&&game.particles.length<=450);
+    WardenMemory.save=memSave;game.leaveWarden();
     game.cls=savedCls;
     game.startRun();game.world.obstacles=[];game.enemies=[];
     for(const type of Object.keys(ENEMY_DEFS))game.spawnEnemy(type,game.P.x+120,game.P.y+50);

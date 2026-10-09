@@ -6,7 +6,7 @@
    guest->host: {t:'hello', name, cls, tree, skin, v}   {t:'cls', cls, tree, skin}   {t:'bye'}   {t:'ping'}
    host->guest: {t:'lobby', players:[{id,name,color,cls,tree,skin}], code}   {t:'bye', reason}   {t:'ping'} */
 
-var MP_PROTOCOL = 5;
+var MP_PROTOCOL = 6;
 var MP_PREFIX = 'emberdeep-mp-v' + MP_PROTOCOL + '-';
 var MP_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 var MP_MAX_PLAYERS = 8;
@@ -267,7 +267,7 @@ MPNet.prototype.join = function(code, name, prog){
   });
   peer.on('error', function(err){
     if(self.peer !== peer) return;
-    if(err && err.type === 'peer-unavailable') self._lost('Lobby ' + code + ' nicht gefunden. Code prüfen.');
+    if(err && err.type === 'peer-unavailable') self._lost('Lobby ' + code + ' nicht gefunden. Code prüfen — oder beide Seite neu laden (Strg+F5), falls ihr verschiedene Spielversionen habt.');
     else if(!self.connected()) self.status('Netzfehler (Join): ' + mpErr(err));
   });
 };

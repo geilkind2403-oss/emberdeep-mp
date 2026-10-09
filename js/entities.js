@@ -134,13 +134,19 @@ class Enemy {
     if(this.dead) return;
     const P = G.nearestPlayer(this.x, this.y);
     if(!P) return;
+    // The arena Warden is scripted: his brain moves him, the light still burns him.
+    if(this.brain){
+      this.brain.update(dt, G);
+      if(P.oil > 0 && dist(P.x, P.y, this.x, this.y) < P.lightR * G.lightMult(P) + this.r * 0.5) G.hurtEnemy(this, P.burn * dt, 'aura', P);
+      return;
+    }
     this.flash = Math.max(0, this.flash - dt);
     const k = Math.exp(-5 * dt);
     this.kb.x *= k; this.kb.y *= k;
     this.slowT -= dt;
     if(this.burnT > 0){
       this.burnT -= dt;
-      G.hurtEnemy(this, this.burnDps * dt);
+      G.hurtEnemy(this, this.burnDps * dt, 'dot', this.burnBy);
       this.flash = Math.max(this.flash, 0.1);
       if(this.hp <= 0){ G.killEnemy(this, this.burnBy); return; }
     }
@@ -177,7 +183,7 @@ class Enemy {
 
     const lightR = P.lightR * G.lightMult(P);
     if(P.oil > 0 && d < lightR + this.r * 0.5){
-      G.hurtEnemy(this, P.burn * (P.buffs && P.buffs.dawn > 0 ? P.dawnBurn : 1) * dt);
+      G.hurtEnemy(this, P.burn * (P.buffs && P.buffs.dawn > 0 ? P.dawnBurn : 1) * dt, 'aura', P);
       this.flash = Math.max(this.flash, 0.25);
       if(this.hp <= 0){ G.killEnemy(this, P); return; }
     }
