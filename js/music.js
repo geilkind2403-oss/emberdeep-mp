@@ -11,7 +11,7 @@
    never replays), skip steps already past, and schedule nothing while the fight
    clock is NaN or stands still (paused).
    Path: track gain -> bus 0.16 (duck) -> lowpass (muffle) -> compressor -> SFX.master,
-   with a shared convolver room feeding the bus.
+   with a shared convolver room feeding the bus (stop(0) cuts its tail too).
    play() of a new id resets layers and transpose. Without a running AudioContext
    every call is silent (a requested track starts on the beat once audio runs),
    and no call ever throws. */
@@ -24,6 +24,7 @@
 
   function clamp(v, a, b){ return v < a ? a : v > b ? b : v; }
   function num(v){ return typeof v === 'number' ? v : NaN; }
+  function trk(id){ return typeof id === 'string' && Object.prototype.hasOwnProperty.call(TRACKS, id) ? TRACKS[id] : null; }
 
   // Chords (MIDI): r = bass root, v = mid voicing, q = third above the root.
   const CH = {
@@ -191,10 +192,10 @@
   // bar = beats per bar; rv = room send; echo = dotted-8th echo level; gain = track trim.
   const TRACKS = {
     corridor: { bpm: 60, bar: 4, fn: corridor, rv: 0.6, echo: 0.3, gain: 1, prox: true },
-    waltz:    { bpm: 96, bar: 3, fn: waltz, rv: 0.4, echo: 0.2, gain: 0.7 },
-    ward:     { bpm: 120, bar: 4, fn: ward, rv: 0.25, echo: 0.16, gain: 0.6 },
-    tallow:   { bpm: 150, bar: 4, fn: tallow, rv: 0.2, echo: 0.12, gain: 0.5 },
-    wicks:    { bpm: 140, bar: 4, fn: wicks, rv: 0.3, echo: 0.15, gain: 0.55 },
+    waltz:    { bpm: 96, bar: 3, fn: waltz, rv: 0.4, echo: 0.2, gain: 0.5 },
+    ward:     { bpm: 120, bar: 4, fn: ward, rv: 0.25, echo: 0.16, gain: 0.42 },
+    tallow:   { bpm: 150, bar: 4, fn: tallow, rv: 0.2, echo: 0.12, gain: 0.32 },
+    wicks:    { bpm: 140, bar: 4, fn: wicks, rv: 0.3, echo: 0.15, gain: 0.38 },
     rest:     { bpm: 72, bar: 4, fn: rest, rv: 0.55, echo: 0.2, gain: 1 }
   };
 
@@ -207,17 +208,19 @@
       this.trans = 0;
       this.prox = 0;
       this.ducked = false;
+      this.duckAt = false;
       this.bus = null;
       this.lp = null;
       this.comp = null;
       this.verb = null;
+      this.ret = null;
       this.curves = {};
     }
 
     // ---- API ----
     play(id, startBt, clock){
       try{
-        if(!TRACKS[id]) return;
+        if(!trk(id)) return;
         const bt = num(startBt), w = this.want;
         const fn = typeof clock === 'function' ? clock : null;
         if(w && w.id === id && (Math.abs(w.bt - bt) < 0.02 || (w.bt !== w.bt && bt !== bt))){
@@ -236,12 +239,15 @@
         this.want = null;
         this._timer(false);
         fade = num(fade);
-        this._drop(fade >= 0 ? Math.max(0.02, fade) : 1);
+        fade = fade >= 0 ? clamp(fade, 0.02, 30) : 1;
+        const had = !!this.cur;
+        this._drop(fade);
+        if(had && fade < 0.1) this._cutRoom(fade);
       }catch(e){}
     }
     current(){ return this.want ? this.want.id : null; }
-    bpm(id){ const t = TRACKS[id]; return t ? t.bpm : 120; }
-    beatsPerBar(id){ const t = TRACKS[id]; return t ? t.bar : 4; }
+    bpm(id){ const t = trk(id); return t ? t.bpm : 120; }
+    beatsPerBar(id){ const t = trk(id); return t ? t.bar : 4; }
     setLayers(n){
       n = Math.floor(num(n));
       this.layers = n > 0 ? Math.min(n, 8) : 0;
@@ -264,20 +270,13 @@
       try{
         v = num(v);
         this.prox = v === v ? clamp(v, 0, 1) : 0;
-        const s = this.cur;
-        if(s && s.tr.prox && this._ok()) s.out.gain.setTargetAtTime(this._level(s), SFX.ctx.currentTime, 0.12);
+        this._prox();
       }catch(e){}
     }
     duck(on){
       try{
-        on = !!on;
-        if(on === this.ducked) return;
-        this.ducked = on;
-        if(!this.bus || !this._ok()) return;
-        const p = this.bus.gain, now = SFX.ctx.currentTime;
-        p.cancelScheduledValues(now);
-        p.setValueAtTime(p.value, now);
-        p.setTargetAtTime(BUS * (on ? 0.5 : 1), now, 0.06);
+        this.ducked = !!on;
+        this._duck();
       }catch(e){}
     }
     muffle(sec){
@@ -309,8 +308,10 @@
         if(!w){ this._timer(false); return; }
         if(!this._ok()) return;
         this._bus();
+        this._duck();
         let s = this.cur;
         if(!s) s = this.cur = this._make(w);
+        this._prox();
         s.clock = w.clock;
         const now = SFX.ctx.currentTime;
         let clk = NaN;
@@ -341,21 +342,56 @@
       }
     }
     _level(s){ return s.tr.gain * (s.tr.prox ? 0.3 + 0.7 * this.prox : 1); }
+    // The game calls setProximity and duck every frame: params change only on a real
+    // change, and one made while audio was not running lands on the next tick.
+    _prox(){
+      const s = this.cur;
+      if(!s || !s.tr.prox || !this._ok()) return;
+      const g = this._level(s);
+      if(Math.abs(g - s.lvl) < 0.005) return;
+      s.lvl = g;
+      s.out.gain.setTargetAtTime(g, SFX.ctx.currentTime, 0.12);
+    }
+    _duck(){
+      if(!this.bus || this.duckAt === this.ducked || !this._ok()) return;
+      this.duckAt = this.ducked;
+      const p = this.bus.gain, now = SFX.ctx.currentTime;
+      p.cancelScheduledValues(now);
+      p.setValueAtTime(p.value, now);
+      p.setTargetAtTime(BUS * (this.ducked ? 0.5 : 1), now, 0.06);
+    }
     _bus(){
       const c = SFX.ctx;
       if(this.bus && this.bus.context === c) return;
       this.cur = null;
       this.bus = c.createGain();
       this.bus.gain.value = BUS * (this.ducked ? 0.5 : 1);
+      this.duckAt = this.ducked;
       this.lp = c.createBiquadFilter();
       this.lp.type = 'lowpass'; this.lp.frequency.value = 18000; this.lp.Q.value = 0.5;
       this.comp = c.createDynamicsCompressor();
       this.comp.threshold.value = -18; this.comp.knee.value = 12; this.comp.ratio.value = 3;
       this.comp.attack.value = 0.006; this.comp.release.value = 0.25;
-      this.verb = c.createConvolver();
-      this.verb.buffer = this._ir(c);
       this.bus.connect(this.lp); this.lp.connect(this.comp); this.comp.connect(SFX.master);
-      this.verb.connect(this.bus);
+      this._room(this._ir(c));
+    }
+    // Shared room: convolver -> return gain -> bus.
+    _room(ir){
+      const c = SFX.ctx;
+      this.verb = c.createConvolver();
+      this.verb.buffer = ir;
+      this.ret = c.createGain();
+      this.verb.connect(this.ret); this.ret.connect(this.bus);
+    }
+    // Hard stop: fade the room's tail out with the music and start a fresh room.
+    _cutRoom(fade){
+      if(!this.verb || !window.SFX || SFX.ctx !== this.verb.context) return;
+      const v = this.verb, r = this.ret, p = r.gain, now = SFX.ctx.currentTime;
+      p.cancelScheduledValues(now);
+      p.setValueAtTime(p.value, now);
+      p.linearRampToValueAtTime(0, now + fade);
+      setTimeout(function(){ try{ v.disconnect(); r.disconnect(); }catch(e){} }, fade * 1000 + 100);
+      this._room(v.buffer);
     }
     _make(w){
       const c = SFX.ctx, tr = TRACKS[w.id];
@@ -364,7 +400,8 @@
         aA: null, aB: 0, next: null, lastClk: NaN, lastMove: 0,
         live: new Set(), nodes: [], fx: {}, lfo: {}, major: undefined, echo: null
       };
-      s.out = c.createGain(); s.out.gain.value = this._level(s); s.out.connect(this.bus);
+      s.lvl = this._level(s);
+      s.out = c.createGain(); s.out.gain.value = s.lvl; s.out.connect(this.bus);
       s.rv = c.createGain(); s.rv.gain.value = tr.rv; s.rv.connect(this.verb);
       s.nodes.push(s.out, s.rv);
       if(tr.echo){
@@ -389,7 +426,8 @@
         p.setValueAtTime(p.value, now);
         p.linearRampToValueAtTime(0, end);
       });
-      s.live.forEach(function(o){ try{ o.stop(end + 0.02); }catch(e){} });
+      const cut = end + 0.02;
+      s.live.forEach(function(o){ try{ if(!(o.end <= cut)) o.stop(cut); }catch(e){} });
       setTimeout(function(){
         s.nodes.forEach(function(n){ try{ n.disconnect(); }catch(e){} });
       }, (fade + 0.3) * 1000);
@@ -445,7 +483,7 @@
       o.type = type;
       o.frequency.value = this._hz(m);
       o.detune.value = det;
-      o.det0 = det; o.tr0 = this.trans;
+      o.det0 = det; o.tr0 = this.trans; o.end = end;
       o.connect(dest);
       o.start(t); o.stop(end);
       s.live.add(o);

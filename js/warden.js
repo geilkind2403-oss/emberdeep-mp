@@ -602,7 +602,15 @@ class WardenView {
     const G = this.G;
     if(!this.brain) this.bt += dt;
     const bt = this.bt;
-    this.pats.forEach((P, id) => { if(bt - P.d.t0 > P.p.dur + 1) this.pats.delete(id); });
+    this.pats.forEach((P, id) => {
+      const u = bt - P.d.t0;
+      if(u > P.p.dur + 1){ this.pats.delete(id); return; }
+      // Blue and orange are also heard: a chime means be still, a crackle means move.
+      if(P.lastU !== undefined) P.p.h.forEach(function(h){
+        if((h.col === 1 || h.col === 2) && P.lastU < h.tw && u >= h.tw){ if(h.col === 1){ if(SFX.chime) SFX.chime(); } else if(SFX.crackle) SFX.crackle(); }
+      });
+      P.lastU = u;
+    });
     this.barks = this.barks.filter(b => bt - b.t < 2.2);
     if(this.s !== this.prevS){ this.onState(this.prevS, this.s); this.prevS = this.s; }
     this.stateFx(dt);

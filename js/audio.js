@@ -225,14 +225,14 @@ class SfxEngine {
   // "Blue" cue: stand still.
   chime(){
     if(!this.ctx || !this.gate('chime', 60)) return;
-    this.tone({ f: 1320, d: 0.45, v: 0.1, type: 'triangle', a: 0.004 });
-    this.tone({ f: 2640, d: 0.22, v: 0.025, a: 0.004 });
+    this.tone({ f: 1320, d: 0.45, v: 0.16, type: 'triangle', a: 0.004 });
+    this.tone({ f: 2640, d: 0.22, v: 0.04, a: 0.004 });
   }
   // "Orange" cue: keep moving.
   crackle(){
     if(!this.ctx || !this.gate('crackle', 60)) return;
-    for(let i = 0; i < 5; i++){
-      this.noiseHit({ f: 1800, q: 2, d: 0.025 + Math.random() * 0.02, v: 0.3, at: i * 0.03 + Math.random() * 0.012 });
+    for(let i = 0; i < 6; i++){
+      this.noiseHit({ f: 1800 * (0.9 + Math.random() * 0.2), q: 1.2, d: 0.04 + Math.random() * 0.03, v: 0.5, at: i * 0.028 + Math.random() * 0.012 });
     }
   }
   horn(){
@@ -253,7 +253,9 @@ class SfxEngine {
   chainRattle(){
     if(!this.ctx || !this.gate('chain', 150)) return;
     for(let i = 0; i < 6; i++){
-      this.noiseHit({ f: 900 * (0.85 + Math.random() * 0.3), q: 4, d: 0.05, v: 0.3, at: i * 0.045 + Math.random() * 0.015 });
+      const at = i * 0.045 + Math.random() * 0.015;
+      this.noiseHit({ f: 900 * (0.85 + Math.random() * 0.3), q: 1.6, d: 0.07, v: 0.6, at: at });
+      this.noiseHit({ f: 2800 * (0.9 + Math.random() * 0.2), q: 5, d: 0.04, v: 0.35, at: at });
     }
   }
   encounterBlip(){
@@ -266,7 +268,8 @@ class SfxEngine {
   }
   candleTick(f){
     if(!this.ctx || !this.gate('tick', 25)) return;
-    this.tone({ f: f || 1800, d: 0.03, v: 0.05, type: 'triangle', a: 0.002 });
+    f = +f;
+    this.tone({ f: f > 20 && f < 20000 ? f : 1800, d: 0.03, v: 0.05, type: 'triangle', a: 0.002 });
   }
   slam(){
     if(!this.ctx || !this.gate('slam', 80)) return;
@@ -324,8 +327,8 @@ class SfxEngine {
   droneTo(v, s){
     if(!this.ctx || !this.droneGain) return;
     const g = this.droneGain, p = g.gain, now = this.ctx.currentTime;
-    v = Math.max(0, +v || 0);
-    s = Math.max(0.02, +s || 0);
+    v = Math.min(1, Math.max(0, +v || 0));
+    s = Math.min(60, Math.max(0.02, +s || 0));
     clearTimeout(this.droneCut);
     if(this.droneOff && v < 0.001) return;
     p.cancelScheduledValues(now);
