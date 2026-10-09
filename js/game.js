@@ -33,15 +33,17 @@ class Game {
     this.score = 0;
     this.embers = 0;
     this.last = 0;
+    this.resetRunXp();
     this.initInput();
     this.initButtons();
+    window.addEventListener('pagehide', () => this.bankXp());
   }
 
   // Boon levels belong to the local keeper (each co-op keeper has their own).
   get upgLevels(){ return (this.P && this.P.upg) || {}; }
 
   stopInput(){
-    this.keys = {}; this.mouse.down = false;
+    this.keys = {}; this.mouse.down = false; this.mouse.alt = false;
     if(this.P) this.P.flameOn = false;
     this._flameOn = false; SFX.flameOff();
   }
@@ -64,7 +66,7 @@ class Game {
     const P = pl || this.P;
     if(!P) return 1;
     const frac = clamp(P.oil / P.maxOil, 0, 1);
-    return (0.25 + 0.75 * Math.pow(frac, 0.5)) * (P.snuffT > 0 ? 0.45 : 1);
+    return (0.25 + 0.75 * Math.pow(frac, 0.5)) * (P.snuffT > 0 ? 0.45 : 1) * (P.buffs && P.buffs.dawn > 0 ? 1.8 : 1);
   }
 
   burst(x, y, color, scale, count, size, life){
@@ -109,7 +111,7 @@ class Game {
 
   initInput(){
     const kmap = {};
-    ['KeyW','KeyA','KeyS','KeyD','KeyE','Space','ShiftLeft','ShiftRight','KeyP','Escape'].forEach(function(code){ kmap[code] = true; });
+    ['KeyW','KeyA','KeyS','KeyD','KeyE','KeyQ','Space','ShiftLeft','ShiftRight','KeyP','Escape'].forEach(function(code){ kmap[code] = true; });
     window.addEventListener('keydown', (e) => {
       if(!kmap[e.code] || e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
@@ -128,8 +130,14 @@ class Game {
       this.mouse.x = e.clientX - r.left;
       this.mouse.y = e.clientY - r.top;
     });
-    this.canvas.addEventListener('mousedown', (e) => { if(e.button === 0) this.mouse.down = true; });
-    window.addEventListener('mouseup', (e) => { if(e.button === 0) this.mouse.down = false; });
+    this.canvas.addEventListener('mousedown', (e) => {
+      if(e.button === 0) this.mouse.down = true;
+      if(e.button === 2) this.mouse.alt = true;
+    });
+    window.addEventListener('mouseup', (e) => {
+      if(e.button === 0) this.mouse.down = false;
+      if(e.button === 2) this.mouse.alt = false;
+    });
     // In co-op, a host clicking into another window must not freeze everyone.
     // Hidden tabs stop rendering anyway, so the host pauses there; guests just let go.
     window.addEventListener('blur', () => { this.stopInput(); if(!this.coop) this.pause(); });
@@ -155,6 +163,14 @@ class Game {
     $('btnPauseTitle').addEventListener('click', function(){ SFX.click(); game.toTitle(); });
     $('btnClass').addEventListener('click', function(){ SFX.click(); game.showClassPicker(); });
     $('btnClassBack').addEventListener('click', function(){ SFX.click(); game.showScreen('screen-title'); });
+    $('btnTree').addEventListener('click', function(){ SFX.click(); game.showTree(); });
+    $('btnTreeBack').addEventListener('click', function(){ SFX.click(); game.showScreen('screen-title'); });
+    $('btnTreeReset').addEventListener('click', function(){
+      SFX.click();
+      Progress.reset(game.cls);
+      game.progressChanged();
+      game.showTree();
+    });
     this.updateClassButton();
     $('btnMotion').addEventListener('click', function(){
       game.R.reducedMotion = !game.R.reducedMotion;
@@ -167,7 +183,7 @@ class Game {
 
   showScreen(name){
     document.body.classList.toggle('in-game', name === null);
-    const ids = ['screen-title','screen-class','screen-upgrade','screen-over','screen-victory','screen-pause'];
+    const ids = ['screen-title','screen-class','screen-tree','screen-upgrade','screen-over','screen-victory','screen-pause'];
     for(let i = 0; i < ids.length; i++){
       document.getElementById(ids[i]).classList.toggle('hidden', ids[i] !== name);
     }
@@ -195,7 +211,7 @@ class Game {
       const number = document.createElement('span');
       number.className = 'boon-index'; number.textContent = '0' + (i + 1);
       const h3 = document.createElement('h3'); h3.textContent = C.name;
-      const flav = document.createElement('div'); flav.className = 'flav'; flav.textContent = C.role;
+      const flav = document.createElement('div'); flav.className = 'flav'; flav.textContent = C.role + ' · LV ' + Progress.level(id);
       const ab = document.createElement('div'); ab.className = 'desc';
       ab.textContent = 'E · ' + C.ability.name + ' — ' + C.ability.desc + ' (' + C.ability.cd + 's)';
       const pas = document.createElement('div'); pas.className = 'desc class-passive'; pas.textContent = C.passive;
@@ -213,25 +229,158 @@ class Game {
     if(!CLASSES[id]) return;
     this.cls = id;
     try{ localStorage.setItem('emberdeep_class', id); }catch(e){}
+    this.progressChanged();
+  }
+  // Class, tree or skin changed: refresh the title and tell the lobby.
+  progressChanged(){
     this.updateClassButton();
-    if(this.lobby) this.lobby.onClassChanged(id);
+    if(this.lobby) this.lobby.onClassChanged(this.cls);
+  }
+  progInfo(){
+    const c = Progress.of(this.cls);
+    return { cls: this.cls, tree: c.tree, skin: c.skin };
   }
   updateClassButton(){
-    const C = CLASSES[this.cls];
-    document.getElementById('btnClass').textContent = C.icon + '  ' + C.name + ' · E ' + C.ability.name + ' — CHANGE';
+    const C = CLASSES[this.cls], pts = Progress.points(this.cls);
+    document.getElementById('btnClass').textContent = C.icon + '  ' + C.name + ' · LV ' + Progress.level(this.cls) + ' · E ' + C.ability.name + ' — CHANGE';
+    document.getElementById('btnTree').textContent = '✦  SKILL TREE' + (pts > 0 ? ' · ' + pts + ' POINT' + (pts > 1 ? 'S' : '') + ' TO SPEND' : '');
+    document.getElementById('btnTree').classList.toggle('has-points', pts > 0);
+  }
+
+  // ---- Skill tree ----
+  showTree(){
+    const game = this, cls = this.cls, C = CLASSES[cls], T = SKILL_TREES[cls], prog = Progress.of(cls);
+    const info = Progress.info(cls), pts = Progress.points(cls);
+    const el = function(tag, cn, text){
+      const e = document.createElement(tag);
+      if(cn) e.className = cn;
+      if(text !== undefined) e.textContent = text;
+      return e;
+    };
+    const tabs = document.getElementById('treeTabs');
+    tabs.innerHTML = '';
+    CLASS_IDS.forEach(function(id){
+      const b = el('button', 'tree-tab' + (id === cls ? ' on' : ''), CLASSES[id].icon + ' ' + CLASSES[id].name + ' · ' + Progress.level(id));
+      b.type = 'button';
+      if(Progress.points(id) > 0) b.classList.add('has-points');
+      b.addEventListener('click', function(){ SFX.click(); game.setClass(id); game.showTree(); });
+      tabs.appendChild(b);
+    });
+    document.getElementById('treeTitle').textContent = C.icon + ' ' + C.name + ' · LEVEL ' + info.level;
+    document.getElementById('treeXpFill').style.width = (info.need ? clamp(info.into / info.need, 0, 1) * 100 : 100) + '%';
+    document.getElementById('treeXpText').textContent = info.need
+      ? Math.floor(info.into) + ' / ' + info.need + ' XP TO LEVEL ' + (info.level + 1)
+      : 'MAX LEVEL';
+    document.getElementById('treePoints').textContent = pts > 0 ? pts + ' POINT' + (pts > 1 ? 'S' : '') + ' TO SPEND' : 'NO POINTS LEFT · PLAY TO LEVEL UP';
+    const cols = document.getElementById('treeCols');
+    cols.innerHTML = '';
+    TREE_BRANCHES.forEach(function(b){
+      const col = el('div', 'tree-col');
+      const head = el('div', 'tree-head');
+      head.appendChild(el('span', '', b.name));
+      head.appendChild(el('kbd', '', b.key));
+      col.appendChild(head);
+      b.slots.forEach(function(slot, i){
+        const N = T.nodes[slot], rank = prog.tree[slot] || 0, max = SLOT_MAX[slot];
+        const open = i === 0 || (prog.tree[b.slots[i - 1]] || 0) > 0;
+        const can = Progress.canRank(cls, slot);
+        const node = el('button', 'tree-node' + (rank >= max ? ' maxed' : '') + (!open ? ' locked' : '') + (can ? ' can' : '') + (slot === 'a1' || slot === 'c2' ? ' unlock' : ''));
+        node.type = 'button';
+        node.dataset.slot = slot;
+        node.disabled = !can;
+        const top = el('div', 'tree-node-top');
+        top.appendChild(el('b', '', N.name));
+        const pips = el('span', 'pips');
+        for(let r = 0; r < max; r++){
+          const dot = el('i');
+          if(r < rank) dot.classList.add('on');
+          pips.appendChild(dot);
+        }
+        top.appendChild(pips);
+        node.appendChild(top);
+        node.appendChild(el('div', 'tree-desc', N.desc));
+        node.addEventListener('click', function(){
+          if(!Progress.rankUp(cls, slot)) return;
+          SFX.upgrade();
+          game.progressChanged();
+          game.showTree();
+          const again = document.querySelector('.tree-node[data-slot="' + slot + '"]');
+          if(again) again.focus({preventScroll:true});
+        });
+        col.appendChild(node);
+      });
+      cols.appendChild(col);
+    });
+    const skins = document.getElementById('treeSkins');
+    skins.innerHTML = '';
+    SKINS.forEach(function(S){
+      const unlocked = S.lvl <= info.level;
+      const b = el('button', 'skin' + (prog.skin === S.id ? ' on' : '') + (unlocked ? '' : ' locked'));
+      b.type = 'button';
+      b.disabled = !unlocked;
+      const sw = el('i', 'swatch');
+      sw.style.background = 'linear-gradient(135deg,' + S.cloak[0] + ',' + S.cloak[1] + ' 55%,' + S.fire.mid + ')';
+      b.appendChild(sw);
+      b.appendChild(el('span', '', unlocked ? S.name : 'LV ' + S.lvl));
+      b.title = S.name + (unlocked ? '' : ' · unlocks at level ' + S.lvl);
+      b.addEventListener('click', function(){
+        if(!Progress.setSkin(cls, S.id)) return;
+        SFX.click();
+        game.progressChanged();
+        game.showTree();
+      });
+      skins.appendChild(b);
+    });
+    const reset = document.getElementById('btnTreeReset');
+    reset.disabled = treeSpent(prog.tree) === 0;
+    if(document.getElementById('screen-tree').classList.contains('hidden')) this.showScreen('screen-tree');
+  }
+
+  // ---- Run XP: banked into the played class at every floor and run end ----
+  resetRunXp(sync){
+    this.floorsCleared = 0;
+    this.xpBonus = 0;
+    this.xpBanked = 0;
+    this.xpGained = 0;
+    this.runCls = this.cls;
+    this.runLevelFrom = Progress.level(this.cls);
+    this.xpSync = !!sync; // co-op guest: the first snapshot sets the baseline
+  }
+  runXp(){ return Math.round(this.score) + XP_PER_FLOOR * this.floorsCleared + this.xpBonus; }
+  bankXp(){
+    if(this.xpSync || !this.runCls) return;
+    const gain = this.runXp() - this.xpBanked;
+    if(gain <= 0) return;
+    this.xpBanked += gain;
+    this.xpGained += gain;
+    const r = Progress.addXp(this.runCls, gain);
+    if(r.to <= r.from) return null;
+    const skin = SKINS.filter(function(S){ return S.lvl > r.from && S.lvl <= r.to; }).pop();
+    const msg = CLASSES[r.cls].name + ' · LEVEL ' + r.to + (skin ? ' · ' + skin.name + ' SKIN' : '');
+    SFX.win();
+    this.toast(msg);
+    this.updateClassButton();
+    return msg;
+  }
+  xpRows(){
+    const lv = Progress.level(this.runCls), C = CLASSES[this.runCls];
+    return [['XP', '+' + this.xpGained], [C.name, 'LV ' + lv + (lv > this.runLevelFrom ? '  ▲ ' + (lv - this.runLevelFrom) : '')]];
   }
 
   startRun(){
     if(this.isGuest()) return; // the host drives co-op runs
+    this.bankXp();
     this.stopInput(); this.P = null; this.t = 0; this.shake = 0;
     this.floor = 0;
     this.score = 0;
     this.embers = 0;
+    this.resetRunXp();
     this.runSeed = this.coop ? this.coop.onRunStart() : (Date.now() >>> 0);
     this.nextFloor();
   }
 
-  makePlayer(cls){
+  // `tree` and `skin` default to the local profile; co-op mates bring their own.
+  makePlayer(cls, tree, skin){
     const W = this.world;
     const base = {
       x: W.spawn.x, y: W.spawn.y,
@@ -273,7 +422,32 @@ class Game {
     P.flame.range += C.flameRange;
     P.dash.cd = Math.max(0.6, P.dash.cd + C.dashCd);
     P.eCdT = 0;
+    const own = Progress.of(P.cls);
+    P.sk = sanitizeTree(P.cls, tree !== undefined ? tree : own.tree);
+    P.skin = skinById(skin !== undefined ? skin : own.skin).id;
+    this.applySkills(P);
     return P;
+  }
+  // Skill tree effects that are plain numbers; behaviours read P.sk directly.
+  applySkills(P){
+    const r = function(slot){ return P.sk[slot] || 0; }, c1 = r('c1');
+    if(P.cls === 'keeper'){ P.maxHp += 10 * c1; P.maxOil += 10 * c1; }
+    else if(P.cls === 'pyro') P.flame.dps *= 1 + 0.08 * c1;
+    else if(P.cls === 'guardian') P.maxHp += 20 * c1;
+    else if(P.cls === 'nightblade'){ P.speed *= 1 + 0.05 * c1; P.dash.cd = Math.max(0.5, P.dash.cd - 0.1 * c1); }
+    else if(P.cls === 'lightbinder'){ P.lightR += 15 * c1; P.maxOil += 8 * c1; }
+    P.hp = P.maxHp; P.oil = P.maxOil;
+    P.eCd = CLASSES[P.cls].ability.cd * (1 - 0.1 * r('b1'));
+    P.ePow = 1 + 0.2 * r('b1');
+    const A = SKILL_TREES[P.cls].alt;
+    P.alt = r('a1') > 0 ? A : null;
+    P.altCd = A.cd * (1 - 0.08 * r('a2'));
+    P.altPow = 1 + 0.2 * r('a2');
+    P.altCdT = 0;
+    P.ultOn = r('c2') > 0;
+    P.ultPow = 1 + 0.25 * r('c3');
+    P.ultRate = 1 + 0.15 * r('c3');
+    P.ult = 0;
   }
 
   // ---- CO-OP ----
@@ -317,7 +491,7 @@ class Game {
       const levels = [], lost = [];
       for(const id in p.upg) for(let n = 0; n < p.upg[id]; n++) levels.push(id);
       for(let n = 0; n < 2 && levels.length; n++) lost.push(levels.splice((Math.random() * levels.length) | 0, 1)[0]);
-      const fresh = this.makePlayer(p.cls);
+      const fresh = this.makePlayer(p.cls, p.sk, p.skin);
       ['id', 'name', 'color', 'tp'].forEach(function(k){ fresh[k] = p[k]; });
       Object.assign(p, fresh);
       levels.forEach(id => this.applyUpgrade(UPGRADES.find(function(u){ return u.id === id; }), p, true));
@@ -402,6 +576,8 @@ class Game {
   }
   nextFloor(){
     const guest = this.isGuest();
+    let levelMsg = null;
+    if(this.floor > 0){ this.floorsCleared++; levelMsg = this.bankXp(); }
     this.floor++;
     this.rng = new Rng(((this.runSeed || 0) + this.floor * 7919) >>> 0);
     this.world = generateFloor(this.floor, this.rng);
@@ -439,7 +615,7 @@ class Game {
     this.state = 'playing';
     this.showScreen(null);
     SFX.floor();
-    this.toast('FLOOR ' + W.num);
+    this.toast(levelMsg || 'FLOOR ' + W.num);
     if(this.coop && !guest) this.coop.onFloor();
   }
   spawnFloorEnemies(){
@@ -509,6 +685,7 @@ class Game {
     if(K){
       K.hp = Math.min(K.maxHp, K.hp + (K.lifesteal || 0));
       K.oil = Math.min(K.maxOil, K.oil + (K.oilOnKill || 0));
+      if(K.ultOn) K.ult = Math.min(100, (K.ult || 0) + e.d.pts * 0.4 * K.ultRate);
     }
     this.killFx(e);
     if(e.d.shards){
@@ -545,6 +722,11 @@ class Game {
     if(P.buffs.aegis > 0){
       this.burst(P.x, P.y, POWERUPS.aegis.color, 0.8, 6, 3, 0.35);
       P.invulnT = 0.25;
+      if(P.spikeT > 0 && src && !src.dead && src.hp !== undefined){
+        src.hp -= P.spikeDmg;
+        src.flash = 0.3;
+        if(src.hp <= 0) this.killEnemy(src, P.spikeBy || P);
+      }
       return;
     }
     if(P.ward > 0 && Math.random() < P.ward){
@@ -593,7 +775,8 @@ class Game {
   gameOver(){
     this.state = 'over';
     SFX.over();
-    const s = this.fillStats('overStats', [['FLOOR', this.floor], ['SCORE', Math.round(this.score)], ['EMBERS', Math.round(this.embers)]]);
+    this.bankXp();
+    const s = this.fillStats('overStats', [['FLOOR', this.floor], ['SCORE', Math.round(this.score)], ['EMBERS', Math.round(this.embers)]].concat(this.xpRows()));
     if(this.score > this.best){
       this.best = Math.round(this.score);
       try{ localStorage.setItem('emberdeep_best', String(this.best)); }catch(e){}
@@ -609,16 +792,19 @@ class Game {
   victory(){
     this.state = 'victory';
     SFX.win();
+    this.xpBonus += XP_VICTORY;
+    this.bankXp();
     if(this.score > this.best){
       this.best = Math.round(this.score);
       try{ localStorage.setItem('emberdeep_best', String(this.best)); }catch(e){}
     }
-    this.fillStats('vicStats', [['SCORE', Math.round(this.score)], ['EMBERS', Math.round(this.embers)]]);
+    this.fillStats('vicStats', [['SCORE', Math.round(this.score)], ['EMBERS', Math.round(this.embers)]].concat(this.xpRows()));
     this.showScreen('screen-victory');
     if(this.coop && this.coop.isHost) this.coop.onEnd('victory');
   }
 
   toTitle(){
+    this.bankXp();
     if(this.coop) this.coop.onTitle();
     this.state = 'title';
     this.world = null;
@@ -627,6 +813,7 @@ class Game {
     this.shots = [];
     this.particles = [];
     this.updateBestLine();
+    this.updateClassButton();
     this.showScreen('screen-title');
   }
 
@@ -839,6 +1026,8 @@ class Game {
       surge: !!k.Space,
       dash: !!(k.ShiftLeft || k.ShiftRight),
       ability: !!k.KeyE,
+      alt: !!this.mouse.alt,
+      ult: !!k.KeyQ,
       tx: this.mouse.x + origin.x,
       ty: this.mouse.y + origin.y
     };
@@ -907,7 +1096,12 @@ class Game {
     }
     const freeOil = p.buffs.well > 0;
     p.eCdT = Math.max(0, (p.eCdT || 0) - dt);
+    p.altCdT = Math.max(0, (p.altCdT || 0) - dt);
+    p.spikeT = Math.max(0, (p.spikeT || 0) - dt);
+    if(p.ultOn) p.ult = Math.min(100, (p.ult || 0) + 0.5 * p.ultRate * dt);
     if(inp.ability && p.eCdT <= 0) this.useAbility(p, inp);
+    if(inp.alt && p.alt && p.altCdT <= 0) this.useAlt(p, inp);
+    if(inp.ult && p.ultOn && p.ult >= 100) this.useUlt(p, inp);
     if(inp.surge && p.surgeCdT <= 0 && p.oil > 0) this.surge(p);
 
     if(!freeOil) p.oil = Math.max(0, p.oil - CFG.drain * dt);
@@ -943,6 +1137,7 @@ class Game {
   // who also gets the kill) and snuffs enemy shots there.
   blast(p, r, dmg, kb, at){
     at = at || p;
+    let kills = 0;
     for(let i = 0; i < this.enemies.length; i++){
       const e = this.enemies[i];
       if(e.dead) continue;
@@ -954,7 +1149,7 @@ class Game {
         const dd = Math.hypot(dx, dy) || 1;
         e.kb.x += (dx / dd) * kb;
         e.kb.y += (dy / dd) * kb;
-        if(e.hp <= 0) this.killEnemy(e, p);
+        if(e.hp <= 0){ this.killEnemy(e, p); kills++; }
       }
     }
     for(let i = 0; i < this.shots.length; i++){
@@ -962,51 +1157,190 @@ class Game {
       if(s.kind !== 'orb' && s.kind !== 'shard') continue;
       if(dist(at.x, at.y, s.x, s.y) < r) s.dead = true;
     }
+    return kills;
   }
   // Class ability on E. Runs on the host like every other source of damage.
   useAbility(p, inp){
-    const ab = CLASSES[p.cls].ability, free = p.buffs.well > 0;
+    const ab = CLASSES[p.cls].ability, free = p.buffs.well > 0, sk = p.sk || {}, pow = p.ePow || 1;
     if(ab.cost && !free && p.oil < ab.cost) return;
     const tx = inp.tx !== undefined ? inp.tx : p.x + Math.cos(p.aim) * 200;
     const ty = inp.ty !== undefined ? inp.ty : p.y + Math.sin(p.aim) * 200;
     const ang = Math.atan2(ty - p.y, tx - p.x), far = dist(p.x, p.y, tx, ty);
-    p.eCdT = ab.cd;
+    p.eCdT = p.eCd || ab.cd;
     if(ab.cost && !free) p.oil -= ab.cost;
     if(ab.id === 'flare'){
       const d = Math.min(far, 320);
-      const z = { kind: 'flare', x: p.x + Math.cos(ang) * d, y: p.y + Math.sin(ang) * d, r: 170, t: 6, max: 6, owner: p };
+      const z = { kind: 'flare', x: p.x + Math.cos(ang) * d, y: p.y + Math.sin(ang) * d, r: 170, t: 6, max: 6, owner: p,
+        dps: (24 + 3 * this.floor) * pow, pull: sk.b2 ? 70 : 0, oil: 4 * (sk.b3 || 0) };
       this.zones.push(z);
       this.abilityFx(z.x, z.y, '#ffb35c', 170);
     } else if(ab.id === 'fireball'){
       const sp = 560;
       this.shots.push({ x: p.x + Math.cos(ang) * 18, y: p.y + Math.sin(ang) * 18, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
-        r: 8, dmg: 55 + 9 * this.floor, life: Math.max(60, Math.min(far, 620)) / sp, color: '#ff7a2f', kind: 'fire', owner: p, dead: false });
+        r: 8, dmg: (55 + 9 * this.floor) * pow, life: Math.max(60, Math.min(far, 620)) / sp, color: '#ff7a2f', kind: 'fire', owner: p, dead: false,
+        cluster: !!sk.b2, storm: sk.b3 || 0 });
     } else if(ab.id === 'bulwark'){
-      this.allPlayers().forEach(function(k){
-        if(k.alive !== false && dist(k.x, k.y, p.x, p.y) < 170) k.buffs.aegis = Math.max(k.buffs.aegis || 0, 3);
+      const dur = 3 * pow;
+      this.allPlayers().forEach(k => {
+        if(k.alive === false || dist(k.x, k.y, p.x, p.y) >= 170) return;
+        k.buffs.aegis = Math.max(k.buffs.aegis || 0, dur);
+        if(sk.b2){ k.hp = Math.min(k.maxHp, k.hp + 20); this.floatText(k.x, k.y, '+20 VIGOR', '#98d9bc'); }
+        if(sk.b3){ k.spikeT = dur; k.spikeDmg = 25 * sk.b3; k.spikeBy = p; }
       });
-      this.blast(p, 170, 10, 760);
+      this.blast(p, 170, 10 * pow, 760 * pow);
       this.abilityFx(p.x, p.y, POWERUPS.aegis.color, 170);
     } else if(ab.id === 'blink'){
-      const d = Math.min(far, 280), dmg = 35 + 6 * this.floor;
-      this.blast(p, 80, dmg, 300);
+      const d = Math.min(far, 280), dmg = (35 + 6 * this.floor) * pow * this.dmgMult(p);
+      let kills = this.blast(p, 80, dmg, 300);
       this.abilityFx(p.x, p.y, '#b18cff', 80);
       p.x += Math.cos(ang) * d; p.y += Math.sin(ang) * d;
       this.constrainKeeper(p);
       p.tp++; // co-op guests snap to the new spot
       p.invulnT = Math.max(p.invulnT, 0.35);
-      this.blast(p, 90, dmg, 360);
+      kills += this.blast(p, 90, dmg, 360);
       this.abilityFx(p.x, p.y, '#b18cff', 90);
+      if(sk.b2 && kills > 0) p.eCdT = 0.4;
+      if(sk.b3){ p.buffs.night = 3; p.nightMult = 1 + 0.25 * sk.b3; }
     } else if(ab.id === 'mend'){
+      const heal = Math.round(35 * pow), oil = Math.round(20 * pow);
       this.allPlayers().forEach(k => {
         if(k.alive === false || dist(k.x, k.y, p.x, p.y) > 230) return;
-        k.hp = Math.min(k.maxHp, k.hp + 35);
-        k.oil = Math.min(k.maxOil, k.oil + 20);
-        this.floatText(k.x, k.y, '+35 VIGOR', '#98d9bc');
+        k.hp = Math.min(k.maxHp, k.hp + heal);
+        k.oil = Math.min(k.maxOil, k.oil + oil);
+        if(sk.b2) k.buffs.aegis = Math.max(k.buffs.aegis || 0, 2);
+        this.floatText(k.x, k.y, '+' + heal + ' VIGOR', '#98d9bc');
       });
+      if(sk.b3) this.zones.push({ kind: 'mend', x: p.x, y: p.y, r: 150, t: 2 + 2 * sk.b3, max: 2 + 2 * sk.b3, owner: p, heal: 8 * pow, oil: 4 });
       this.abilityFx(p.x, p.y, '#98d9bc', 230);
     }
     if(p === this.P) SFX.ability();
+  }
+  // Skill-tree attack on the right mouse button (unlocked by a1).
+  useAlt(p, inp){
+    const A = p.alt, free = p.buffs.well > 0, sk = p.sk, f = this.floor, a = p.aim;
+    if(A.cost && !free && p.oil < A.cost) return;
+    if(A.cost && !free) p.oil -= A.cost;
+    p.altCdT = p.altCd;
+    const pow = p.altPow * this.dmgMult(p);
+    if(p.cls === 'keeper'){
+      const n = [1, 3, 5][sk.a3 || 0];
+      for(let i = 0; i < n; i++) this.playerShot(p, a + (i - (n - 1) / 2) * 0.13, { speed: 760, dmg: (18 + 3 * f) * pow, pierce: 3, life: 0.65, r: 6, color: '#ffe7a6' });
+    } else if(p.cls === 'pyro'){
+      this.beam(p, a, 440, 18, (30 + 5 * f) * pow, sk.a3 ? (6 + 2 * f) * sk.a3 : 0);
+    } else if(p.cls === 'guardian'){
+      this.arcBlast(p, a, 125, 1.0, (25 + 4 * f) * pow, 900, 0.7 * (sk.a3 || 0));
+    } else if(p.cls === 'nightblade'){
+      const n = sk.a3 ? 5 : 3;
+      for(let i = 0; i < n; i++) this.playerShot(p, a + (i - (n - 1) / 2) * 0.17, { speed: 820, dmg: (14 + 3 * f) * pow, pierce: sk.a3 >= 2 ? 1 : 0, life: 0.5, r: 5, color: '#c9a8ff' });
+    } else if(p.cls === 'lightbinder'){
+      const n = sk.a3 >= 2 ? 2 : 1;
+      for(let i = 0; i < n; i++){
+        const ma = a + (n > 1 ? (i ? 0.3 : -0.3) : 0);
+        this.zones.push({ kind: 'mote', x: p.x + Math.cos(ma) * 20, y: p.y + Math.sin(ma) * 20, vx: Math.cos(ma) * 150, vy: Math.sin(ma) * 150,
+          r: 70, t: 3.5, max: 3.5, owner: p, dps: (16 + 3 * f) * pow, heal: 6 * p.altPow, oil: sk.a3 ? 4 : 0 });
+      }
+    }
+    if(p === this.P) SFX.alt();
+  }
+  // Ultimate on Q (unlocked by c2): charged by kills, spent whole.
+  useUlt(p, inp){
+    p.ult = 0;
+    const pow = p.ultPow, f = this.floor, sk = p.sk, U = SKILL_TREES[p.cls].ult;
+    const tx = inp.tx !== undefined ? inp.tx : p.x + Math.cos(p.aim) * 200;
+    const ty = inp.ty !== undefined ? inp.ty : p.y + Math.sin(p.aim) * 200;
+    if(p.cls === 'keeper'){
+      p.buffs.dawn = 6;
+      p.dawnBurn = 6 * pow;
+      p.hp = Math.min(p.maxHp, p.hp + 30 * pow);
+      this.abilityFx(p.x, p.y, '#ffe08a', 260);
+    } else if(p.cls === 'pyro'){
+      this.zones.push({ kind: 'meteor', x: tx, y: ty, r: 210, t: 3, max: 3, owner: p, every: 0.25, tick: 0, dmg: (60 + 8 * f) * pow });
+    } else if(p.cls === 'guardian'){
+      this.allPlayers().forEach(function(k){ if(k.alive !== false) k.buffs.aegis = Math.max(k.buffs.aegis || 0, 4 * pow); });
+      this.enemies.forEach(e => { if(!e.dead && dist(p.x, p.y, e.x, e.y) < 330 + e.r) this.stun(e, 1.5); });
+      this.blast(p, 330, (40 + 6 * f) * pow, 1100);
+      this.abilityFx(p.x, p.y, POWERUPS.aegis.color, 330);
+    } else if(p.cls === 'nightblade'){
+      const dmg = (60 + 10 * f) * pow * this.dmgMult(p), near = e => dist(p.x, p.y, e.x, e.y);
+      const targets = this.enemies.filter(e => !e.dead && near(e) < 520).sort((a, b) => near(a) - near(b)).slice(0, 6 + (sk.c3 || 0));
+      this.abilityFx(p.x, p.y, '#b18cff', 70);
+      targets.forEach(e => {
+        if(e.dead) return;
+        const a = Math.atan2(p.y - e.y, p.x - e.x);
+        p.x = e.x + Math.cos(a) * (e.r + 16); p.y = e.y + Math.sin(a) * (e.r + 16);
+        this.constrainKeeper(p);
+        this.abilityFx(e.x, e.y, '#b18cff', 60);
+        this.blast(p, 60, dmg, 380, { x: e.x, y: e.y });
+      });
+      p.tp++;
+      p.invulnT = Math.max(p.invulnT, 1);
+    } else if(p.cls === 'lightbinder'){
+      this.zones.push({ kind: 'sanct', x: p.x, y: p.y, r: 250, t: 7, max: 7, owner: p, dps: (14 + 2 * f) * pow, heal: 10 * pow, oil: 6 * pow, slow: true });
+      this.abilityFx(p.x, p.y, '#98d9bc', 250);
+    }
+    if(p === this.P){ SFX.ult(); this.shake += 5; this.toast(U.name); }
+    else if(this.coop && this.coop.isHost) this.coop.net.sendTo(p.id, { t: 'say', msg: U.name });
+  }
+  // Flame and skill damage bonus from Nightfall and Dawnbreak.
+  dmgMult(p){
+    return (p.buffs.night > 0 ? p.nightMult || 1 : 1) * (p.buffs.dawn > 0 ? 1.3 : 1);
+  }
+  stun(e, t){ if(!e.isBoss) e.stunT = Math.max(e.stunT || 0, t); }
+  ignite(e, dps, t, by){
+    if(!(e.burnT > 0) || dps >= e.burnDps) e.burnDps = dps;
+    e.burnT = Math.max(e.burnT || 0, t);
+    e.burnBy = by;
+  }
+  // A piercing keeper projectile ('bolt'); `pierce` extra shadows it passes through.
+  playerShot(p, ang, o){
+    this.shots.push({ x: p.x + Math.cos(ang) * 16, y: p.y + Math.sin(ang) * 16, vx: Math.cos(ang) * o.speed, vy: Math.sin(ang) * o.speed,
+      r: o.r, dmg: o.dmg, life: o.life, color: o.color, kind: 'bolt', pierce: o.pierce, hit: [], owner: p, dead: false });
+  }
+  // Instant line from the keeper along `ang`, stopped by the first wall.
+  beam(p, ang, len, width, dmg, burnDps){
+    const ex = Math.cos(ang), ey = Math.sin(ang);
+    let reach = len;
+    for(let d = 20; d < len; d += 12){
+      if(inAnyObstacle(this.world.obstacles, p.x + ex * d, p.y + ey * d, 0)){ reach = d; break; }
+    }
+    for(let i = 0; i < this.enemies.length; i++){
+      const e = this.enemies[i];
+      if(e.dead) continue;
+      const rx = e.x - p.x, ry = e.y - p.y, along = rx * ex + ry * ey;
+      if(along < 0 || along > reach + e.r || Math.abs(rx * ey - ry * ex) > width + e.r) continue;
+      e.hp -= dmg;
+      e.flash = 0.3;
+      if(e.hp <= 0){ this.killEnemy(e, p); continue; }
+      if(burnDps) this.ignite(e, burnDps, 3, p);
+    }
+    this.beamFx(p.x + ex * 14, p.y + ey * 14, p.x + ex * reach, p.y + ey * reach, '#ff7a2f');
+  }
+  // Short frontal arc: damage, a hard shove and an optional stun; it also swats shots.
+  arcBlast(p, ang, range, half, dmg, kb, stunT){
+    for(let i = 0; i < this.enemies.length; i++){
+      const e = this.enemies[i];
+      if(e.dead) continue;
+      const dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy) || 1;
+      if(d > range + e.r || Math.abs(angleDiff(Math.atan2(dy, dx), ang)) > half + e.r / d) continue;
+      e.hp -= dmg;
+      e.flash = 0.3;
+      e.kb.x += dx / d * kb;
+      e.kb.y += dy / d * kb;
+      if(stunT) this.stun(e, stunT);
+      if(e.hp <= 0) this.killEnemy(e, p);
+    }
+    for(let i = 0; i < this.shots.length; i++){
+      const s = this.shots[i];
+      if((s.kind === 'orb' || s.kind === 'shard') && dist(p.x, p.y, s.x, s.y) < range + 20 &&
+        Math.abs(angleDiff(Math.atan2(s.y - p.y, s.x - p.x), ang)) < half + 0.3) s.dead = true;
+    }
+    this.abilityFx(p.x + Math.cos(ang) * 65, p.y + Math.sin(ang) * 65, '#f4e3a1', 75);
+    if(p === this.P) this.shake += 2;
+  }
+  beamFx(x, y, x2, y2, color){
+    if(this.effects.length >= 80) this.effects.shift();
+    this.effects.push({ kind: 'beam', x, y, x2, y2, color, life: 0.3, maxLife: 0.3 });
+    if(this.coop && this.coop.isHost) this.coop.net.broadcast({ t: 'fx', k: 'beam', x: Math.round(x), y: Math.round(y), x2: Math.round(x2), y2: Math.round(y2), c: color });
   }
   // Ring + sparks; co-op guests get the same through the host.
   abilityFx(x, y, color, r){
@@ -1017,19 +1351,54 @@ class Game {
   explodeFireball(s){
     this.blast(s.owner, 105, s.dmg, 420, s);
     this.abilityFx(s.x, s.y, s.color, 105);
+    if(s.cluster){
+      for(let i = 0; i < 3; i++){
+        const a = i / 3 * TAU + rand(-0.3, 0.3), at = { x: s.x + Math.cos(a) * 75, y: s.y + Math.sin(a) * 75 };
+        this.blast(s.owner, 65, s.dmg * 0.4, 260, at);
+        this.abilityFx(at.x, at.y, '#ff9a3d', 65);
+      }
+    }
+    if(s.storm) this.zones.push({ kind: 'pool', x: s.x, y: s.y, r: 95, t: 1 + 2 * s.storm, max: 1 + 2 * s.storm, owner: s.owner, dps: 18 + 3 * this.floor });
     SFX.noiseHit({ f: 300, f2: 70, d: 0.35, v: 0.22, ft: 'lowpass' });
   }
-  // Flare beacons burn every shadow inside them.
+  // Lingering skill areas: they burn, pull or slow shadows and mend keepers inside.
   updateZones(dt){
+    const W = this.world, keepers = this.allPlayers();
     for(let i = 0; i < this.zones.length; i++){
       const z = this.zones[i];
       z.t -= dt;
-      for(let j = 0; j < this.enemies.length; j++){
+      if(z.vx || z.vy){
+        z.x += z.vx * dt; z.y += z.vy * dt;
+        if(inAnyObstacle(W.obstacles, z.x, z.y, 0) || z.x < 20 || z.y < 20 || z.x > W.w - 20 || z.y > W.h - 20){ z.vx = z.vy = 0; }
+      }
+      if(z.kind === 'meteor'){
+        z.tick -= dt;
+        while(z.tick <= 0 && z.t > 0){
+          z.tick += z.every;
+          const a = rand(0, TAU), d = Math.sqrt(Math.random()) * z.r, at = { x: z.x + Math.cos(a) * d, y: z.y + Math.sin(a) * d };
+          this.blast(z.owner, 85, z.dmg, 420, at);
+          this.abilityFx(at.x, at.y, '#ff7a2f', 85);
+          if(z.owner === this.P) this.shake += 1.5;
+        }
+        continue;
+      }
+      for(let j = 0; j < this.enemies.length && z.dps; j++){
         const e = this.enemies[j];
-        if(e.dead || dist(z.x, z.y, e.x, e.y) > z.r + e.r) continue;
-        e.hp -= (24 + 3 * this.floor) * dt;
+        if(e.dead) continue;
+        const d = dist(z.x, z.y, e.x, e.y);
+        if(d > z.r + e.r) continue;
+        e.hp -= z.dps * dt;
         e.flash = Math.max(e.flash, 0.15);
+        if(z.slow) e.slowT = 0.25;
+        if(z.pull && !e.isBoss && d > 12){ e.x += (z.x - e.x) / d * z.pull * dt; e.y += (z.y - e.y) / d * z.pull * dt; }
         if(e.hp <= 0) this.killEnemy(e, z.owner);
+      }
+      if(!z.heal && !z.oil) continue;
+      for(let k = 0; k < keepers.length; k++){
+        const q = keepers[k];
+        if(q.alive === false || q.hp <= 0 || dist(z.x, z.y, q.x, q.y) > z.r) continue;
+        if(z.heal) q.hp = Math.min(q.maxHp, q.hp + z.heal * dt);
+        if(z.oil) q.oil = Math.min(q.maxOil, q.oil + z.oil * dt);
       }
     }
     this.zones = this.zones.filter(function(z){ return z.t > 0; });
@@ -1050,6 +1419,7 @@ class Game {
     }
   }
   emitFlame(p, dt){
+    const sparks = skinById(p.skin).fire.sparks;
     p.emberClock = (p.emberClock || 0) + dt;
     const interval = this.R.reducedMotion ? 0.07 : 0.018;
     while(p.emberClock >= interval){
@@ -1059,11 +1429,11 @@ class Game {
       const sp = rand(260, 420), life = rand(0.22, 0.45);
       this.particles.push({ x:p.x+Math.cos(p.aim)*17, y:p.y+Math.sin(p.aim)*17,
         vx:Math.cos(angle)*sp, vy:Math.sin(angle)*sp, life, maxLife:life,
-        size:rand(1.5,3.5), color:pick(['#ffcb70','#e8943e','#ffe7a6']) });
+        size:rand(1.5,3.5), color:pick(sparks) });
     }
   }
   burnCone(p, dt){
-    const dmg = p.flame.dps * dt * (p.buffs.blaze > 0 ? 2 : 1);
+    const dmg = p.flame.dps * dt * (p.buffs.blaze > 0 ? 2 : 1) * this.dmgMult(p);
     for(let i = 0; i < this.enemies.length; i++){
       const e = this.enemies[i];
       if(e.dead) continue;
@@ -1171,6 +1541,20 @@ class Game {
       s.y += s.vy * dt;
       s.life -= dt;
       s.dead = inAnyObstacle(W.obstacles, s.x, s.y, s.r) || s.life <= 0 || s.x < 0 || s.x > W.w || s.y < 0 || s.y > W.h;
+      if(s.kind === 'bolt'){
+        for(let ei = 0; ei < this.enemies.length && !s.dead; ei++){
+          const e = this.enemies[ei];
+          if(e.dead || s.hit.indexOf(e.id) >= 0 || dist(s.x, s.y, e.x, e.y) >= s.r + e.r) continue;
+          s.hit.push(e.id);
+          e.hp -= s.dmg;
+          e.flash = 0.25;
+          e.kb.x += s.vx * 0.25; e.kb.y += s.vy * 0.25;
+          this.burst(s.x, s.y, s.color, 0.5, 5, 3, 0.3);
+          if(e.hp <= 0) this.killEnemy(e, s.owner);
+          if(s.pierce-- <= 0) s.dead = true;
+        }
+        continue;
+      }
       if(s.kind === 'fire'){
         for(let ei = 0; ei < this.enemies.length && !s.dead; ei++){
           const e = this.enemies[ei];

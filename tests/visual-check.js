@@ -4,6 +4,8 @@
   const results=[];
   function check(label,condition){if(!condition)throw new Error(label);results.push(label);}
   const savedBest=game.best;
+  Progress.save=function(){}; // checks never touch the saved profile
+  Progress.data=Progress.blank();
   try{
     for(const floor of [1,3,5,10]){
       game.floor=floor-1;game.P=null;game.nextFloor();
@@ -56,10 +58,59 @@
     check('Pyromancer is frail and its fireball explodes',K.maxHp===80&&tgt.hp<hp0-40);
     game.cls='guardian';game.startRun();K=game.P;stand(K);game.useAbility(K,{tx:K.x,ty:K.y});const hpG=K.hp;K.invulnT=0;game.damagePlayer(30,null,K);
     check('Guardian bulwark blocks hits',K.maxHp===140&&K.hp===hpG);
-    game.cls='nightblade';game.startRun();game.world.obstacles=[];K=game.P;stand(K);const x0=K.x;game.useAbility(K,{tx:K.x+200,ty:K.y});
-    check('Nightblade shadowstep blinks',K.x-x0>150);
+    game.cls='nightblade';game.startRun();game.world.obstacles=[];K=game.P;stand(K);const x0=K.x,dir=K.x<game.world.w/2?1:-1;game.useAbility(K,{tx:K.x+200*dir,ty:K.y});
+    check('Nightblade shadowstep blinks',Math.abs(K.x-x0)>150);
     game.cls='lightbinder';game.startRun();K=game.P;stand(K);K.hp=40;game.useAbility(K,{tx:K.x,ty:K.y});
     check('Lightbinder mends vigor',K.hp===75);
+    // ---- Keeper progression ----
+    Progress.data=Progress.blank();
+    check('A fresh keeper starts at level 1 without points',Progress.level('keeper')===1&&Progress.points('keeper')===0);
+    Progress.addXp('keeper',xpStep(1)+xpStep(2));
+    check('XP raises the level and grants points',Progress.level('keeper')===3&&Progress.points('keeper')===2);
+    check('Tree nodes need their predecessor',!Progress.canRank('keeper','a2')&&Progress.rankUp('keeper','a1')&&Progress.canRank('keeper','a2'));
+    Progress.rankUp('keeper','a2');
+    check('Points run out',Progress.points('keeper')===0&&!Progress.rankUp('keeper','b1'));
+    check('Skins unlock with level',Progress.skinUnlocked('keeper','ash')&&!Progress.skinUnlocked('keeper','verd')&&!Progress.setSkin('keeper','verd'));
+    let toMax=0;for(let l=1;l<LEVEL_MAX;l++)toMax+=xpStep(l);Progress.addXp('keeper',toMax);
+    check('Level 20 caps the climb and fills the tree exactly',Progress.level('keeper')===LEVEL_MAX&&TREE_SLOTS.reduce((a,k)=>a+SLOT_MAX[k],0)===LEVEL_MAX-1&&Progress.skinUnlocked('keeper','sun'));
+    check('Foreign trees are clamped',JSON.stringify(sanitizeTree('pyro',{a1:5,a2:3,a3:2,b2:1,c3:9}))==='{"a1":1,"a2":3,"a3":2}');
+    Progress.data=Progress.blank();game.cls='pyro';Progress.addXp('pyro',xpStep(1));game.showTree();
+    check('Skill tree shows three branches of three',document.querySelectorAll('#treeCols .tree-col').length===3&&document.querySelectorAll('#treeCols .tree-node').length===9);
+    document.querySelector('.tree-node[data-slot="a1"]').click();
+    check('Clicking a node spends a point',Progress.of('pyro').tree.a1===1&&Progress.points('pyro')===0);
+    const full={};TREE_SLOTS.forEach(k=>full[k]=SLOT_MAX[k]);
+    const talent={keeper:()=>game.zones[0].pull>0&&game.zones[0].oil>0,pyro:()=>game.shots.some(s=>s.kind==='fire'&&s.cluster&&s.storm===2),
+      guardian:()=>K.spikeT>0&&K.buffs.aegis>3,nightblade:()=>K.buffs.night>0,lightbinder:()=>game.zones.some(z=>z.kind==='mend')};
+    const ultOk={keeper:()=>K.buffs.dawn>0,pyro:()=>game.zones.some(z=>z.kind==='meteor'),guardian:()=>K.buffs.aegis>0,
+      nightblade:()=>dist(K.x,K.y,dummy.x,dummy.y)<dummy.r+40,lightbinder:()=>game.zones.some(z=>z.kind==='sanct')};
+    let dummy;
+    for(const cls of CLASS_IDS){
+      Progress.data.classes[cls].tree=Object.assign({},full);
+      game.cls=cls;game.startRun();game.world.obstacles=[];game.enemies=[];game.shots=[];game.zones=[];game.world.spawnsLeft=0;
+      K=game.P;stand(K);K.aim=0;
+      check(cls+' tree applies (RMB, Q, faster E)',K.alt&&K.ultOn&&K.eCd<CLASSES[cls].ability.cd);
+      game.useAbility(K,{tx:K.x+100,ty:K.y});
+      check(cls+' ability talents apply',talent[cls]());
+      game.zones=[];game.shots=[];
+      dummy=game.spawnEnemy('hollow',K.x+90,K.y);dummy.hp=dummy.maxHp=1e5;
+      game.mouse.alt=true;game.update(1/60);game.mouse.alt=false;
+      for(let i=0;i<30;i++){K.invulnT=1;game.update(1/60);}
+      check(cls+' RMB attack hits',dummy.hp<1e5&&K.altCdT>0);
+      game.zones=[];dummy.hp=1e5;dummy.x=K.x+90;dummy.y=K.y;K.hp=40;K.ult=100;
+      const o=game.cameraOrigin();game.mouse.x=dummy.x-o.x;game.mouse.y=dummy.y-o.y;
+      game.keys={KeyQ:true};game.update(1/60);game.keys={};
+      const meteor=game.zones.find(z=>z.kind==='meteor');if(meteor)meteor.r=1;
+      check(cls+' ultimate fires',K.ult<1&&ultOk[cls]());
+      for(let i=0;i<90;i++){K.invulnT=1;game.update(1/60);}
+      check(cls+' ultimate hurts shadows',dummy.hp<1e5);
+      K.skin='sun';game.R.render(game,1/60);K.skin='blood';K.flameOn=true;game.R.render(game,1/60);
+    }
+    check('Every skill zone, skin and HUD pip renders',!document.getElementById('ultWrap').classList.contains('hidden'));
+    Progress.data=Progress.blank();game.cls='keeper';game.startRun();game.best=1e9;game.score=450;game.gameOver();
+    check('A run banks its score as XP for the class',Progress.of('keeper').xp===450&&document.getElementById('overStats').textContent.includes('+450'));
+    game.startRun();game.nextFloor();
+    check('Each floor cleared adds XP',Progress.of('keeper').xp===450+XP_PER_FLOOR);
+    game.best=savedBest;
     game.cls=savedCls;
     game.startRun();game.world.obstacles=[];game.enemies=[];
     for(const type of Object.keys(ENEMY_DEFS))game.spawnEnemy(type,game.P.x+120,game.P.y+50);
@@ -77,6 +128,7 @@
     results.push('450-particle render: '+((performance.now()-start)/60).toFixed(1)+' ms/frame (CPU submission)');
   }catch(e){results.push('FAILED: '+e.message);console.error(e);}
   game.best=savedBest;
+  Progress.load();game.resetRunXp();
   const panel=document.createElement('div');panel.style.cssText='position:fixed;bottom:12px;right:12px;z-index:99;background:#071013ed;color:#e1d5b6;padding:12px;font:11px monospace;border:1px solid #ad956055;max-width:380px';
   const status=document.createElement('div');status.id='check-results';status.textContent=results.some(r=>r.startsWith('FAILED'))?results[results.length-1]:results.filter(r=>!r.includes('CPU submission')).length+' checks passed';panel.appendChild(status);
   const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Test details';details.appendChild(summary);

@@ -3,10 +3,10 @@
    No own server, no port forwarding, no VPN.
    The host's peer id is MP_PREFIX + 6-char invite code; guests connect to it.
    Transport messages (game messages live in mp-coop.js):
-   guest->host: {t:'hello', name, cls, v}   {t:'cls', cls}   {t:'bye'}   {t:'ping'}
-   host->guest: {t:'lobby', players:[{id,name,color,cls}], code}   {t:'bye', reason}   {t:'ping'} */
+   guest->host: {t:'hello', name, cls, tree, skin, v}   {t:'cls', cls, tree, skin}   {t:'bye'}   {t:'ping'}
+   host->guest: {t:'lobby', players:[{id,name,color,cls,tree,skin}], code}   {t:'bye', reason}   {t:'ping'} */
 
-var MP_PROTOCOL = 4;
+var MP_PROTOCOL = 5;
 var MP_PREFIX = 'emberdeep-mp-v' + MP_PROTOCOL + '-';
 var MP_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 var MP_MAX_PLAYERS = 8;
@@ -67,7 +67,9 @@ function MPNet(events){
   this.myId = null;
   this.myName = 'Wickkeeper';
   this.myCls = 'keeper';
-  this.players = [];  // [{id,name,color,cls}], host first
+  this.myTree = {};
+  this.mySkin = 'ash';
+  this.players = [];  // [{id,name,color,cls,tree,skin}], host first
   this.timer = null;
 }
 MPNet.prototype.emit = function(name){
@@ -114,11 +116,11 @@ MPNet.prototype._heartbeat = function(){
 };
 
 // ---------- Host ----------
-MPNet.prototype.host = function(name, cls){
+MPNet.prototype.host = function(name, prog){
   this.leave();
   this.isHost = true;
   this.myName = mpCleanName(name, 'Host');
-  this.myCls = cls || 'keeper';
+  this._setProg(prog);
   this._openHost(mpMakeCode());
 };
 MPNet.prototype._openHost = function(code){
@@ -133,7 +135,7 @@ MPNet.prototype._openHost = function(code){
   peer.on('open', function(id){
     if(self.peer !== peer) return;
     self.myId = id;
-    self.players = [{ id: id, name: self.myName, color: MP_COLORS[0], cls: self.myCls }];
+    self.players = [{ id: id, name: self.myName, color: MP_COLORS[0], cls: self.myCls, tree: self.myTree, skin: self.mySkin }];
     self._startHeartbeat();
     self.broadcastLobby();
   });
@@ -160,7 +162,7 @@ MPNet.prototype._onHostConn = function(c){
     if(!msg || !msg.t) return;
     self.lastSeen[c.peer] = Date.now();
     if(msg.t === 'hello') self._onHello(c, msg);
-    else if(msg.t === 'cls') self._setPlayerClass(c.peer, msg.cls);
+    else if(msg.t === 'cls') self._setPlayerClass(c.peer, msg);
     else if(msg.t === 'bye'){ if(self.conns[c.peer] === c) self._dropPeer(c.peer); }
     else if(msg.t !== 'ping' && self.conns[c.peer] === c) self.emit('message', msg, c.peer);
   });
@@ -172,21 +174,31 @@ MPNet.prototype._onHello = function(c, msg){
   var known = this.players.some(function(p){ return p.id === c.peer; });
   if(!known && this.players.length >= MP_MAX_PLAYERS){ this._reject(c, 'Lobby voll (' + MP_MAX_PLAYERS + ').'); return; }
   this.conns[c.peer] = c;
-  if(!known) this.players.push({ id: c.peer, name: mpCleanName(msg.name, 'Gast'), color: this._freeColor(), cls: msg.cls || 'keeper' });
+  if(!known) this.players.push({ id: c.peer, name: mpCleanName(msg.name, 'Gast'), color: this._freeColor(), cls: 'keeper', tree: {}, skin: 'ash' });
+  this._setPlayerClass(c.peer, msg, true);
   this.broadcastLobby();
   if(!known) this.emit('peerJoined', c.peer);
 };
-MPNet.prototype._setPlayerClass = function(id, cls){
+// Class, skill tree and skin of a lobby member ({cls, tree, skin}).
+MPNet.prototype._setPlayerClass = function(id, prog, quiet){
   const p = this.players.find(function(q){ return q.id === id; });
-  if(!p || p.cls === cls) return;
-  p.cls = cls;
-  this.broadcastLobby();
+  if(!p || !prog) return;
+  p.cls = CLASSES[prog.cls] ? prog.cls : 'keeper';
+  p.tree = sanitizeTree(p.cls, prog.tree);
+  p.skin = skinById(prog.skin).id;
+  if(!quiet) this.broadcastLobby();
 };
-// Picking a class in the lobby; it applies from the next run on.
-MPNet.prototype.setClass = function(cls){
-  this.myCls = cls;
-  if(this.isHost){ if(this.myId) this._setPlayerClass(this.myId, cls); }
-  else this.send({ t: 'cls', cls: cls });
+MPNet.prototype._setProg = function(prog){
+  prog = prog || {};
+  this.myCls = prog.cls || 'keeper';
+  this.myTree = prog.tree || {};
+  this.mySkin = prog.skin || 'ash';
+};
+// Picking a class, tree or skin in the lobby; it applies from the next run on.
+MPNet.prototype.setClass = function(prog){
+  this._setProg(prog);
+  if(this.isHost){ if(this.myId) this._setPlayerClass(this.myId, prog); }
+  else this.send({ t: 'cls', cls: this.myCls, tree: this.myTree, skin: this.mySkin });
 };
 MPNet.prototype._reject = function(c, reason){
   try{ c.send({ t: 'bye', reason: reason }); }catch(e){}
@@ -222,14 +234,14 @@ MPNet.prototype.sendTo = function(id, msg){
 };
 
 // ---------- Guest ----------
-MPNet.prototype.join = function(code, name, cls){
+MPNet.prototype.join = function(code, name, prog){
   var self = this;
   code = mpNormCode(code);
   if(code.length !== 6){ this.status('Code muss 6 Zeichen haben.'); return; }
   this.leave();
   this.isHost = false;
   this.myName = mpCleanName(name, 'Gast');
-  this.myCls = cls || 'keeper';
+  this._setProg(prog);
   this.code = code;
   this.status('Verbinde zu ' + code + ' …');
   var peer = new Peer({ debug: 0 });
@@ -246,7 +258,7 @@ MPNet.prototype.join = function(code, name, cls){
       if(self.conn !== c) return;
       self.lastHostMsg = Date.now();
       self.status('Verbunden — warte auf den Host.');
-      c.send({ t: 'hello', name: self.myName, cls: self.myCls, v: MP_PROTOCOL });
+      c.send({ t: 'hello', name: self.myName, cls: self.myCls, tree: self.myTree, skin: self.mySkin, v: MP_PROTOCOL });
       self._startHeartbeat();
     });
     c.on('data', function(msg){ if(self.conn === c) self._onGuestData(msg); });

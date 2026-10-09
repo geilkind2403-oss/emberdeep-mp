@@ -142,6 +142,18 @@ class SfxEngine {
     this.tone({ f: 330, f2: 990, d: 0.25, v: 0.14, type: 'triangle' });
     this.noiseHit({ f: 1200, f2: 300, d: 0.25, v: 0.1 });
   }
+  alt(){
+    if(!this.gate('alt', 80)) return;
+    this.tone({ f: 520, f2: 260, d: 0.12, v: 0.1, type: 'triangle' });
+    this.noiseHit({ f: 2200, f2: 700, d: 0.12, v: 0.07 });
+  }
+  ult(){
+    this.tone({ f: 110, f2: 440, d: 0.7, v: 0.22, type: 'sawtooth' });
+    this.noiseHit({ f: 400, f2: 3000, d: 0.6, v: 0.16 });
+    [523, 784, 1047].forEach(function(f, i){
+      SFX.tone({ f: f, d: 0.35, v: 0.09, at: 0.1 + i * 0.08, type: 'triangle' });
+    });
+  }
   power(){
     [440, 554, 659, 880].forEach(function(f, i){
       SFX.tone({ f: f, f2: f * 1.5, d: 0.18, v: 0.1, at: i * 0.05, type: 'triangle' });
