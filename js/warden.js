@@ -1201,9 +1201,10 @@ class WardenBrain {
     const keys = ['p1.op', 'p2.op', 'p3.op'][ph - 1];
     if(keys){ this.bark(keys + (this.opBark % (ph === 3 ? 2 : 3))); this.opBark++; }
     // The open chest-lantern spills oil: the fight must not starve anyone.
-    for(let i = 0; i < 2; i++){
+    const lying = G.world.pickups.filter(function(p){ return p.source === 'chest'; }).length;
+    for(let i = 0; i < 2 && lying + i < 4; i++){
       const a = this.rng.range(0, TAU);
-      G.addPickup({ type: 'oil', x: e.x + Math.cos(a) * 70, y: e.y + Math.sin(a) * 70, val: 15, t: G.t });
+      G.addPickup({ type: 'oil', source: 'chest', x: e.x + Math.cos(a) * 70, y: e.y + Math.sin(a) * 70, val: 15, t: G.t });
     }
     if(e.hpFloor > 1 && e.hp <= e.hpFloor + 0.5) this.bark('b.floor' + ph, 20);
     this.openEnd = this.bt + WARDEN.boxT + (this.undying ? 1.5 : WARDEN.openingT[ph - 1]);
@@ -2114,6 +2115,10 @@ WardenView.prototype.drawHazard = function(c, R, h, u, d, t){
     const r = h.r0 + h.vr * (u - h.ts);
     if(r <= 2) return;
     const a0 = h.gapW > 0 ? h.gapA + h.gapW / 2 : 0, a1 = h.gapW > 0 ? h.gapA - h.gapW / 2 + TAU : TAU;
+    // Only the part inside the Ward matters; outside it is noise.
+    const bR = this.boxR();
+    c.save();
+    if(bR < 2000){ c.beginPath(); c.arc(C.x, C.y, bR + 3, 0, TAU); c.clip(); }
     c.lineWidth = h.thick;
     c.strokeStyle = hexA(WCOL[h.col], h.col === 1 ? 0.35 : 0.7);
     c.beginPath(); c.arc(h.cx, h.cy, r, a0, a1); c.stroke();
@@ -2125,6 +2130,7 @@ WardenView.prototype.drawHazard = function(c, R, h, u, d, t){
       c.lineWidth = 2; c.strokeStyle = '#fff1d6aa'; c.setLineDash([3, 9]);
       c.beginPath(); c.arc(h.cx, h.cy, r, a0, a1); c.stroke(); c.setLineDash([]);
     }
+    c.restore();
     return;
   }
   if(h.ty === 'beam'){
