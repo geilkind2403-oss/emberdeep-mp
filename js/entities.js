@@ -140,7 +140,7 @@ class Enemy {
     this.slowT -= dt;
     if(this.burnT > 0){
       this.burnT -= dt;
-      this.hp -= this.burnDps * dt;
+      G.hurtEnemy(this, this.burnDps * dt);
       this.flash = Math.max(this.flash, 0.1);
       if(this.hp <= 0){ G.killEnemy(this, this.burnBy); return; }
     }
@@ -177,7 +177,7 @@ class Enemy {
 
     const lightR = P.lightR * G.lightMult(P);
     if(P.oil > 0 && d < lightR + this.r * 0.5){
-      this.hp -= P.burn * (P.buffs && P.buffs.dawn > 0 ? P.dawnBurn : 1) * dt;
+      G.hurtEnemy(this, P.burn * (P.buffs && P.buffs.dawn > 0 ? P.dawnBurn : 1) * dt);
       this.flash = Math.max(this.flash, 0.25);
       if(this.hp <= 0){ G.killEnemy(this, P); return; }
     }

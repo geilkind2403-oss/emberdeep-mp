@@ -421,6 +421,7 @@ Coop.prototype.onMessage = function(msg, from){
     this.uiStatus('Der Host ist zurück in der Lobby — warte auf den nächsten Start.');
   }
   else if(msg.t === 'say') g.toast(msg.msg || '');
+  else if(msg.t === 'talk') g.talk(String(msg.s || ''), msg.v, true);
   else if(msg.t === 'fx' && msg.k === 'beam'){
     g.effects.push({ kind: 'beam', x: msg.x, y: msg.y, x2: msg.x2, y2: msg.y2, color: msg.c, life: 0.3, maxLife: 0.3 });
     if(g.P && dist(g.P.x, g.P.y, msg.x, msg.y) < 700) SFX.alt();

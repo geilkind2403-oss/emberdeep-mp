@@ -142,6 +142,11 @@ class SfxEngine {
     this.tone({ f: 330, f2: 990, d: 0.25, v: 0.14, type: 'triangle' });
     this.noiseHit({ f: 1200, f2: 300, d: 0.25, v: 0.1 });
   }
+  // One letter of boss speech.
+  voice(f){
+    if(!this.gate('voice', 28)) return;
+    this.tone({ f: f * (0.96 + Math.random() * 0.08), d: 0.05, v: 0.055, type: 'square' });
+  }
   alt(){
     if(!this.gate('alt', 80)) return;
     this.tone({ f: 520, f2: 260, d: 0.12, v: 0.1, type: 'triangle' });

@@ -1,0 +1,6 @@
+/* Boss encounter: Undertale-style speech box. */
+.talk{position:absolute;left:50%;bottom:128px;transform:translateX(-50%);width:min(660px,92vw);display:flex;gap:18px;align-items:flex-start;
+  padding:18px 22px;background:#000;border:3px solid #fff;box-shadow:0 0 0 2px #000,0 0 40px #000c;z-index:7}
+.talk-face{flex:none;width:46px;height:46px;display:grid;place-items:center;font-size:30px;color:#b06bff;border:2px solid #fff3;text-shadow:0 0 14px #b06bff}
+.talk-text{flex:1;min-height:46px;font:17px/1.55 'Courier New',monospace;letter-spacing:1px;color:#fff;white-space:pre-wrap;text-align:left}
+@media(max-width:760px){.talk{bottom:150px;padding:12px 14px;gap:12px}.talk-text{font-size:14px}.talk-face{width:34px;height:34px;font-size:22px}}

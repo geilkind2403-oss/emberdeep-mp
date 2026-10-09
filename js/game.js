@@ -34,6 +34,8 @@ class Game {
     this.embers = 0;
     this.last = 0;
     this.resetRunXp();
+    this.talkQueue = [];
+    this.talkNow = null;
     this.initInput();
     this.initButtons();
     window.addEventListener('pagehide', () => this.bankXp());
@@ -98,6 +100,43 @@ class Game {
   floatText(x, y, text, color){
     if(this.effects.length >= 80) this.effects.shift();
     this.effects.push({ kind: 'text', x, y, text, color, life: 0.9, maxLife: 0.9 });
+  }
+
+  // Boss speech in an Undertale-style box: typed letter by letter with a voice
+  // blip, pausing at punctuation. The host's lines are mirrored to guests.
+  talk(text, voice, local){
+    this.talkQueue.push({ text: text, voice: voice || 140 });
+    if(!local && this.coop && this.coop.isHost) this.coop.net.broadcast({ t: 'talk', s: text, v: voice || 140 });
+  }
+  talking(){ return !!this.talkNow || this.talkQueue.length > 0; }
+  clearTalk(){
+    this.talkQueue = [];
+    this.talkNow = null;
+    const el = document.getElementById('talk');
+    if(el) el.classList.add('hidden');
+  }
+  updateTalk(dt){
+    let T = this.talkNow;
+    if(!T){
+      if(!this.talkQueue.length) return;
+      T = this.talkNow = Object.assign(this.talkQueue.shift(), { shown: 0, wait: 0, hold: 0 });
+      document.getElementById('talk').classList.remove('hidden');
+    }
+    if(T.shown < T.text.length){
+      T.wait -= dt;
+      while(T.wait <= 0 && T.shown < T.text.length){
+        const ch = T.text[T.shown++];
+        T.wait += ch === '.' || ch === '!' || ch === '?' ? 0.28 : ch === ',' ? 0.12 : 1 / 32;
+        if(ch !== ' ' && ch !== '.') SFX.voice(T.voice);
+      }
+      document.getElementById('talkText').textContent = T.text.slice(0, T.shown);
+      return;
+    }
+    T.hold += dt;
+    if(T.hold > 1.1 + T.text.length * 0.025){
+      this.talkNow = null;
+      if(!this.talkQueue.length) document.getElementById('talk').classList.add('hidden');
+    }
   }
 
   toast(text){
@@ -587,6 +626,7 @@ class Game {
     this.zones = [];
     this.particles = [];
     this.effects = []; this.trails = []; this.hurtT = 0;
+    this.clearTalk();
     this._trailClock = 0;
     this.P = this.P || this.makePlayer(this.cls);
     if(this.coop && !guest) this.coop.syncMates();
@@ -723,7 +763,7 @@ class Game {
       this.burst(P.x, P.y, POWERUPS.aegis.color, 0.8, 6, 3, 0.35);
       P.invulnT = 0.25;
       if(P.spikeT > 0 && src && !src.dead && src.hp !== undefined){
-        src.hp -= P.spikeDmg;
+        this.hurtEnemy(src, P.spikeDmg);
         src.flash = 0.3;
         if(src.hp <= 0) this.killEnemy(src, P.spikeBy || P);
       }
@@ -750,7 +790,7 @@ class Game {
     }
     this.burst(P.x, P.y, '#ff4d6d', 1, 10, 4, 0.5);
     if(P.thorns > 0 && src && !src.dead && src.hp !== undefined){
-      src.hp -= P.thorns;
+      this.hurtEnemy(src, P.thorns);
       if(src.hp <= 0) this.killEnemy(src, P);
     }
     if(P.hp <= 0) this.keeperDown(P);
@@ -805,6 +845,7 @@ class Game {
 
   toTitle(){
     this.bankXp();
+    this.clearTalk();
     if(this.coop) this.coop.onTitle();
     this.state = 'title';
     this.world = null;
@@ -1143,7 +1184,7 @@ class Game {
       if(e.dead) continue;
       const d = dist(at.x, at.y, e.x, e.y);
       if(d < r + e.r){
-        e.hp -= dmg;
+        this.hurtEnemy(e, dmg);
         e.flash = 0.3;
         const dx = e.x - at.x, dy = e.y - at.y;
         const dd = Math.hypot(dx, dy) || 1;
@@ -1285,6 +1326,13 @@ class Game {
   dmgMult(p){
     return (p.buffs.night > 0 ? p.nightMult || 1 : 1) * (p.buffs.dawn > 0 ? 1.3 : 1);
   }
+  // Every hit on a shadow goes through here: a boss can be shielded (talking,
+  // changing phase) or held at an HP floor until its script lets it fall.
+  hurtEnemy(e, dmg){
+    if(e.shieldT > 0) return;
+    e.hp -= dmg;
+    if(e.hpFloor > 0 && e.hp < e.hpFloor) e.hp = e.hpFloor;
+  }
   stun(e, t){ if(!e.isBoss) e.stunT = Math.max(e.stunT || 0, t); }
   ignite(e, dps, t, by){
     if(!(e.burnT > 0) || dps >= e.burnDps) e.burnDps = dps;
@@ -1308,7 +1356,7 @@ class Game {
       if(e.dead) continue;
       const rx = e.x - p.x, ry = e.y - p.y, along = rx * ex + ry * ey;
       if(along < 0 || along > reach + e.r || Math.abs(rx * ey - ry * ex) > width + e.r) continue;
-      e.hp -= dmg;
+      this.hurtEnemy(e, dmg);
       e.flash = 0.3;
       if(e.hp <= 0){ this.killEnemy(e, p); continue; }
       if(burnDps) this.ignite(e, burnDps, 3, p);
@@ -1322,7 +1370,7 @@ class Game {
       if(e.dead) continue;
       const dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy) || 1;
       if(d > range + e.r || Math.abs(angleDiff(Math.atan2(dy, dx), ang)) > half + e.r / d) continue;
-      e.hp -= dmg;
+      this.hurtEnemy(e, dmg);
       e.flash = 0.3;
       e.kb.x += dx / d * kb;
       e.kb.y += dy / d * kb;
@@ -1387,7 +1435,7 @@ class Game {
         if(e.dead) continue;
         const d = dist(z.x, z.y, e.x, e.y);
         if(d > z.r + e.r) continue;
-        e.hp -= z.dps * dt;
+        this.hurtEnemy(e, z.dps * dt);
         e.flash = Math.max(e.flash, 0.15);
         if(z.slow) e.slowT = 0.25;
         if(z.pull && !e.isBoss && d > 12){ e.x += (z.x - e.x) / d * z.pull * dt; e.y += (z.y - e.y) / d * z.pull * dt; }
@@ -1443,7 +1491,7 @@ class Game {
       const ea = Math.atan2(dy, dx);
       if(Math.abs(angleDiff(ea, p.aim)) > p.flame.half + e.r / (d || 1)) continue;
       const crit = Math.random() < (p.flame.crit || 0);
-      e.hp -= dmg * (crit ? p.flame.critMult : 1);
+      this.hurtEnemy(e, dmg * (crit ? p.flame.critMult : 1));
       e.flash = Math.max(e.flash, 0.2);
       e.kb.x += dx / (d || 1) * p.flame.kb * dt;
       e.kb.y += dy / (d || 1) * p.flame.kb * dt;
@@ -1458,6 +1506,7 @@ class Game {
   update(dt){
     if(this.state !== 'playing') return;
     this.t += dt;
+    this.updateTalk(dt);
     if(this.isGuest()){ this.updateGuest(dt); return; }
     const W = this.world, P = this.P;
     if(!W || !P || P.hp <= 0 && !this.coop) return;
@@ -1546,7 +1595,7 @@ class Game {
           const e = this.enemies[ei];
           if(e.dead || s.hit.indexOf(e.id) >= 0 || dist(s.x, s.y, e.x, e.y) >= s.r + e.r) continue;
           s.hit.push(e.id);
-          e.hp -= s.dmg;
+          this.hurtEnemy(e, s.dmg);
           e.flash = 0.25;
           e.kb.x += s.vx * 0.25; e.kb.y += s.vy * 0.25;
           this.burst(s.x, s.y, s.color, 0.5, 5, 3, 0.3);
