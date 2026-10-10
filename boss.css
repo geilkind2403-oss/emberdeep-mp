@@ -1,0 +1,61 @@
+/* Boss encounter: Undertale-style speech box. */
+.talk{position:absolute;left:50%;bottom:128px;transform:translateX(-50%);width:min(660px,92vw);display:flex;gap:18px;align-items:flex-start;
+  padding:18px 22px;background:#000;border:3px solid #fff;box-shadow:0 0 0 2px #000,0 0 40px #000c;z-index:7}
+.talk-face{flex:none;width:46px;height:46px;display:grid;place-items:center;font-size:30px;color:#b06bff;border:2px solid #fff3;text-shadow:0 0 14px #b06bff}
+.talk-text{flex:1;min-height:46px;font:17px/1.55 'Courier New',monospace;letter-spacing:1px;color:#fff;white-space:pre-wrap;text-align:left}
+@media(max-width:760px){.talk{bottom:150px;padding:12px 14px;gap:12px}.talk-text{font-size:14px}.talk-face{width:34px;height:34px;font-size:22px}}
+.talk--narr .talk-face{display:none}
+.talk--narr .talk-text{padding-left:6px}
+.c-b{color:#7ddcff;text-shadow:0 0 8px #7ddcff88}.c-o{color:#ff8a3d;text-shadow:0 0 8px #ff8a3d88}.c-y{color:#ffe14d;text-shadow:0 0 8px #ffe14d88}
+.shake i{display:inline-block;font-style:normal;animation:shiver .14s steps(2) infinite}
+@keyframes shiver{0%{transform:translate(0,0)}50%{transform:translate(1px,-1px)}100%{transform:translate(-1px,1px)}}
+body.reduced-motion .shake i{animation:none}
+/* Scenes: letterbox bars, the HUD steps back. */
+#letterbox{position:absolute;inset:0;pointer-events:none;z-index:6}
+#letterbox i{position:absolute;left:0;right:0;height:56px;background:#000;transition:transform .6s ease}
+#letterbox i:first-child{top:0;transform:translateY(-100%)}#letterbox i:last-child{bottom:0;transform:translateY(100%)}
+#letterbox.on i{transform:none}
+body.warden-scene .hud-bl,body.warden-scene .hud-br,body.warden-scene .hud-tr{opacity:.3;transition:opacity .6s}
+/* The name card at the encounter. */
+.boss-card{position:absolute;left:50%;top:30%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;z-index:7;opacity:0;transition:opacity .5s}
+.boss-card.on{opacity:1}
+.boss-card b{display:block;font-weight:normal;font-size:clamp(34px,5vw,64px);letter-spacing:.35em;color:#efe6ff;text-shadow:0 0 30px #b06bff}
+.boss-card span{display:block;margin-top:12px;font:11px 'Courier New',monospace;letter-spacing:5px;color:#c9b2ef}
+/* The Warden's bar. */
+.boss-atk{font:10px 'Courier New',monospace;letter-spacing:4px;color:#f3e6ff;min-height:14px;margin-bottom:6px}
+.boss-meta{display:flex;justify-content:space-between;margin-top:7px;font:9px 'Courier New',monospace;letter-spacing:2px;color:#c9b2ef}
+#bossWrap.locked .bossbar{box-shadow:0 0 14px #ffffff55;animation:breathe 1s infinite}
+#bossWrap.open .bossbar{border-color:#ffd98a;box-shadow:0 0 16px #ffd98a66}
+#bossWrap.veil #bossFill{filter:saturate(.6) brightness(.8)}
+#bossWrap.gold #bossName{color:#ffe14d}#bossWrap.gold #bossFill{background:#ffe14d}
+.souls-pulse #scoreVal,.souls-pulse .micro-label{color:#ffd98a;text-shadow:0 0 18px #ffd98a;animation:breathe .8s infinite}
+/* Names of the kindled souls. */
+.soul-line{margin-top:10px;font:11px 'Courier New',monospace;letter-spacing:1px;color:#ffe39b;opacity:0;max-width:min(680px,90vw)}
+.soul-line.show{animation:soulIn 4s both}
+@keyframes soulIn{0%{opacity:0}10%,80%{opacity:1}100%{opacity:0}}
+/* The fake victory screen: real until it cracks. */
+.fake-victory{z-index:8}
+.fake-victory .falls i{display:inline-block;font-style:normal;transition:opacity .2s,color .4s}
+.fake-victory.cracking .falls i{animation:goOut .2s both}
+.fake-victory.cracking .falls i:nth-child(1){animation-delay:.15s}.fake-victory.cracking .falls i:nth-child(2){animation-delay:.3s}
+.fake-victory.cracking .falls i:nth-child(3){animation-delay:.45s}.fake-victory.cracking .falls i:nth-child(4){animation-delay:.6s}.fake-victory.cracking .falls i:nth-child(5){animation-delay:.75s}
+@keyframes goOut{to{opacity:.08;color:#b06bff}}
+.fake-victory.cracking .section-sigil{color:#b06bff;text-shadow:0 0 40px #b06bff}
+.fake-victory .shards{position:absolute;inset:0;pointer-events:none;display:none}
+.fake-victory.shatter{animation:fvOut .6s .05s both}
+.fake-victory.shatter .shards{display:block}
+.fake-victory .shards i{position:absolute;background:#ffffff;opacity:0}
+.fake-victory.shatter .shards i{animation:shardFly .6s both}
+.fake-victory .shards i:nth-child(1){left:10%;top:20%;width:30%;height:2px;transform:rotate(18deg)}
+.fake-victory .shards i:nth-child(2){left:40%;top:10%;width:2px;height:40%;transform:rotate(-12deg)}
+.fake-victory .shards i:nth-child(3){left:55%;top:45%;width:35%;height:2px;transform:rotate(-30deg)}
+.fake-victory .shards i:nth-child(4){left:20%;top:60%;width:28%;height:2px;transform:rotate(40deg)}
+.fake-victory .shards i:nth-child(5){left:70%;top:15%;width:2px;height:35%;transform:rotate(25deg)}
+.fake-victory .shards i:nth-child(6){left:30%;top:35%;width:40%;height:2px;transform:rotate(-8deg)}
+.fake-victory .shards i:nth-child(7){left:62%;top:70%;width:2px;height:25%;transform:rotate(-35deg)}
+.fake-victory .shards i:nth-child(8){left:8%;top:80%;width:32%;height:2px;transform:rotate(-20deg)}
+.fake-victory .shards i:nth-child(9){left:48%;top:58%;width:2px;height:30%;transform:rotate(55deg)}
+@keyframes shardFly{0%{opacity:0}20%{opacity:1}100%{opacity:0}}
+@keyframes fvOut{0%{filter:none;opacity:1}60%{filter:brightness(2.5);opacity:1}100%{opacity:0;transform:scale(1.04)}}
+body.reduced-motion .fake-victory.shatter{animation:fade .4s both}
+@keyframes fade{to{opacity:0}}

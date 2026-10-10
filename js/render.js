@@ -46,6 +46,7 @@ class Renderer {
   }
   // Stonework is generated once per floor. Animation never consumes gameplay RNG.
   bakeWorld(W){
+    if(W.arena){this.bakeArena(W);return;}
     const canvas=document.createElement('canvas');canvas.width=W.w;canvas.height=W.h;
     const c=canvas.getContext('2d'),rng=new Rng(W.num*11731+43);
     c.fillStyle='#101e23';c.fillRect(0,0,W.w,W.h);
@@ -104,6 +105,46 @@ class Renderer {
       this.sigil(c,o.x+o.w/2,o.y+o.h/2-4,Math.min(o.w,o.h)*.23,'#9eab89',.3,0);
       c.strokeStyle='#091117';c.beginPath();c.moveTo(o.x+o.w*.65,o.y);c.lineTo(o.x+o.w*.5,o.y+19);c.lineTo(o.x+o.w*.59,o.y+27);c.stroke();
     });
+    this.worldCache={world:W,canvas};
+  }
+  // The Warden's Rest: a stone corridor over the abyss and a round hall.
+  bakeArena(W){
+    const canvas=document.createElement('canvas');canvas.width=W.w;canvas.height=W.h;
+    const c=canvas.getContext('2d'),rng=new Rng(W.num*11731+43),A=W.arena,cr=A.corridor;
+    c.fillStyle='#020306';c.fillRect(0,0,W.w,W.h);
+    for(let i=0;i<220;i++){c.fillStyle=rng.chance(.5)?'#0b0d1622':'#1a102422';c.fillRect(rng.range(0,W.w),rng.range(0,W.h),rng.range(1,3),rng.range(1,3));}
+    const tiles=(clip)=>{
+      c.save();clip();c.clip();
+      for(let y=0;y<W.h;y+=64){
+        for(let x=-48;x<W.w;x+=96){
+          const xx=x+(Math.floor(y/64)%2)*48,shade=rng.int(0,9);
+          c.fillStyle='rgb('+(20+shade)+','+(26+shade)+','+(36+shade)+')';c.fillRect(xx+1,y+1,94,62);
+          c.strokeStyle='rgba(150,140,190,.10)';c.lineWidth=1;c.beginPath();c.moveTo(xx+2,y+62);c.lineTo(xx+2,y+2);c.lineTo(xx+92,y+2);c.stroke();
+          c.fillStyle='#04060c80';c.fillRect(xx+2,y+59,91,3);
+        }
+      }
+      c.restore();
+    };
+    tiles(()=>{c.beginPath();c.rect(cr.x,cr.y,cr.w,cr.h);});
+    tiles(()=>{c.beginPath();c.arc(A.cx,A.cy,A.floorR,0,TAU);});
+    // Rings and the great sigil of the hall.
+    c.strokeStyle='#a79c7033';c.lineWidth=2;
+    [600,520,420,300,170].forEach(r=>{c.beginPath();c.arc(A.cx,A.cy,r,0,TAU);c.stroke();});
+    this.sigil(c,A.cx,A.cy,520,'#a79c70',.15,0);
+    this.sigil(c,A.cx,A.cy,110,'#c58cff',.22,0);
+    // The edge of the hall falls away into the dark.
+    const g=c.createRadialGradient(A.cx,A.cy,A.floorR-40,A.cx,A.cy,A.floorR+30);g.addColorStop(0,'#00000000');g.addColorStop(1,'#000000ee');
+    c.fillStyle=g;c.beginPath();c.arc(A.cx,A.cy,A.floorR+30,0,TAU);c.fill();
+    c.fillStyle='#05070c';c.fillRect(cr.x-16,cr.y+80,16,cr.h-80);c.fillRect(cr.x+cr.w,cr.y+80,16,cr.h-80);
+    // Names scratched into the corridor floor, hundreds of them.
+    c.save();c.font='11px "Courier New"';c.fillStyle='#b9b0d01c';
+    for(let i=0;i<90;i++){
+      const n=WSOULS[i%WSOULS.length].split(' · ')[0];
+      c.save();c.translate(rng.range(cr.x+12,cr.x+cr.w-40),rng.range(cr.y+100,cr.y+cr.h-20));c.rotate(rng.range(-.5,.5));c.fillText(n,0,0);c.restore();
+    }
+    for(let i=0;i<40;i++){const x=rng.range(cr.x+10,cr.x+cr.w-30),y=rng.range(cr.y+100,cr.y+cr.h-20);c.fillRect(x,y,1,9);c.fillRect(x+4,y,1,9);c.fillRect(x+8,y,1,9);c.fillRect(x+12,y,1,9);c.fillRect(x-2,y+4,18,1);}
+    c.restore();
+    (W.props||[]).forEach(p=>this.drawProp(c,p));
     this.worldCache={world:W,canvas};
   }
   // Static set dressing, baked once per floor. Lit props get their glow per frame.
@@ -247,6 +288,7 @@ class Renderer {
     c.fillStyle='#060d12';c.fillRect(0,0,this.w,this.h);
     if(!this.worldCache||this.worldCache.world!==W)this.bakeWorld(W);
     c.save();c.translate(-ox,-oy);c.drawImage(this.worldCache.canvas,0,0);
+    if(G.warden)G.warden.drawUnder(c,this,t);
     const lightR=P.alive===false?0:Math.max(12,P.lightR*G.lightMult());
     // Long, soft silhouettes give the lantern physical weight in the room.
     c.fillStyle='rgba(1,5,9,.35)';
@@ -260,7 +302,7 @@ class Renderer {
       }
     });
     c.restore();
-    lc.globalCompositeOperation='source-over';lc.clearRect(0,0,this.w,this.h);lc.fillStyle='rgba(2,8,14,.68)';lc.fillRect(0,0,this.w,this.h);
+    lc.globalCompositeOperation='source-over';lc.clearRect(0,0,this.w,this.h);lc.fillStyle=W.arena?'rgba(2,3,9,'+W.arena.dark+')':'rgba(2,8,14,.68)';lc.fillRect(0,0,this.w,this.h);
     lc.globalCompositeOperation='destination-out';
     const flick=this.reducedMotion?1:1+.025*Math.sin(t*13)+.012*Math.sin(t*29);
     this.punchHole(lc,P.x-ox,P.y-oy,lightR*1.45*flick);
@@ -273,6 +315,12 @@ class Renderer {
     W.vents.forEach(v=>this.punchHole(lc,v.x-ox,v.y-oy,v.active&&v.fuel>0?125:48));
     (W.props||[]).forEach(p=>{const L=LIT_PROPS[p.kind];if(L&&this.visible(p.x,p.y,L.r))this.punchHole(lc,p.x-ox,p.y-oy,L.r*(this.reducedMotion?1:1+.06*Math.sin(t*7+p.seed)));});
     G.zones.forEach(z=>this.punchHole(lc,z.x-ox,z.y-oy,z.r*1.3*clamp(z.t/.6,0,1)));
+    if(G.warden){
+      G.warden.lights((x,y,r)=>this.punchHole(lc,x-ox,y-oy,r),t);
+      // A soft lit seam along the Ward, so its edge always reads.
+      const br=G.warden.boxR();
+      if(br<2000){const g=lc.createRadialGradient(WARDEN.C.x-ox,WARDEN.C.y-oy,Math.max(1,br-60),WARDEN.C.x-ox,WARDEN.C.y-oy,br+40);g.addColorStop(0,'#00000000');g.addColorStop(.6,'#00000088');g.addColorStop(1,'#00000000');lc.fillStyle=g;lc.beginPath();lc.arc(WARDEN.C.x-ox,WARDEN.C.y-oy,br+40,0,TAU);lc.fill();}
+    }
     G.shots.forEach(s=>{if(s.kind==='fire')this.punchHole(lc,s.x-ox,s.y-oy,70);});
     W.pickups.forEach(p=>this.punchHole(lc,p.x-ox,p.y-oy,p.type==='ember'?35:57));
     this.punchHole(lc,W.gate.x-ox,W.gate.y-oy,W.gateOpen?160:65);
@@ -284,7 +332,9 @@ class Renderer {
     this.drawGate(c,G,t);this.drawVents(c,G,t);this.drawLitProps(c,G,t);this.drawZones(c,G,t);this.drawPickups(c,G,t);
     this.drawTrails(c,G);this.drawEnemies(c,G,t);this.drawFlameCone(c,P,t);this.drawSurge(c,P);
     this.drawPlayer(c,G,t);this.drawMates(c,G,t);this.drawShots(c,G);this.drawParticles(c,G);this.drawEffects(c,G);
-    c.restore();this.drawAtmosphere(c,this.reducedMotion?0:t,ox,oy,false);this.drawReticle(G,ox,oy);this.drawDamage(c,G);this.drawGateGuide(c,G,ox,oy);
+    if(G.warden)G.warden.drawOver(c,this,t);
+    c.restore();
+    if(G.warden)G.warden.drawScreen(c,this);this.drawAtmosphere(c,this.reducedMotion?0:t,ox,oy,false);this.drawReticle(G,ox,oy);this.drawDamage(c,G);this.drawGateGuide(c,G,ox,oy);
     this.syncHud(G,P,W);
   }
   visible(x,y,pad=80){const b=this.bounds;return x>b.x-pad&&y>b.y-pad&&x<b.x+b.w+pad&&y<b.y+b.h+pad;}
@@ -382,6 +432,7 @@ class Renderer {
   }
   drawEnemies(c,G,t){
     G.enemies.forEach(e=>{
+      if(e.type==='warden'&&G.warden){G.warden.drawWarden(c,this,e,t);return;}
       if(e.dead||!this.visible(e.x,e.y))return;
       const NP=G.nearestPlayer(e.x,e.y);
       const tt=this.reducedMotion?0:t,ang=Math.atan2(NP.y-e.y,NP.x-e.x),r=e.r,color=e.d.eye;
@@ -573,7 +624,7 @@ class Renderer {
     c.save();c.translate(xx,yy);c.rotate(a);c.strokeStyle='#eac986';c.lineWidth=1.5;c.beginPath();c.moveTo(-6,-6);c.lineTo(0,0);c.lineTo(-6,6);c.stroke();c.restore();
   }
   syncHud(G,P,W){
-    if(!this.hud){const $=id=>document.getElementById(id);this.hud={};['hpFill','hpText','oilFill','oilText','floorLabel','floorName','scoreVal','emberVal','surgeFill','dashFill','surgeTime','dashTime','bossWrap','bossName','bossFill','darkWarn','hint','objective','fuelPrompt','buffRow','classFill','classIcon','classTime','classLabel','altWrap','altFill','altIcon','altTime','altLabel','ultWrap','ultFill','ultIcon','ultTime','ultLabel'].forEach(id=>this.hud[id]=$(id));}
+    if(!this.hud){const $=id=>document.getElementById(id);this.hud={};['hpFill','hpText','oilFill','oilText','floorLabel','floorName','scoreVal','emberVal','surgeFill','dashFill','surgeTime','dashTime','bossWrap','bossName','bossFill','darkWarn','hint','objective','fuelPrompt','buffRow','classFill','classIcon','classTime','classLabel','altWrap','altFill','altIcon','altTime','altLabel','ultWrap','ultFill','ultIcon','ultTime','ultLabel','bossSub','bossAtk','bossPips','oilLabel'].forEach(id=>this.hud[id]=$(id));}
     // The HUD does not need to update at the canvas frame rate.
     if(this.hudTime!==undefined&&G.t-this.hudTime<.08&&G.t>=this.hudTime)return;this.hudTime=G.t;
     const h=this.hud;h.hpFill.style.width=clamp(P.hp/P.maxHp*100,0,100)+'%';h.oilFill.style.width=clamp(P.oil/P.maxOil*100,0,100)+'%';
@@ -592,9 +643,23 @@ class Renderer {
       h.altTime.textContent=aReady?'':P.altCdT.toFixed(1);h.altFill.parentElement.classList.toggle('ready',aReady);}
     if(P.ultOn){h.ultIcon.textContent=T.ult.icon;h.ultLabel.textContent=T.ult.name;h.ultFill.style.height=uFrac*100+'%';
       h.ultTime.textContent=uFrac>=1?'':Math.floor(uFrac*100)+'%';h.ultFill.parentElement.classList.toggle('ready',uFrac>=1);}
-    const boss=G.enemies.find(e=>e.isBoss&&!e.dead);h.bossWrap.classList.toggle('hidden',!boss);
-    if(boss){h.bossName.textContent=boss.d.name;h.bossFill.style.width=clamp(boss.hp/boss.maxHp*100,0,100)+'%';}
-    const remaining=G.enemies.length+W.spawnsLeft;h.objective.textContent=W.gateOpen?'THE STAIR IS LIT · DESCEND':boss?'EXTINGUISH THE '+(boss.type==='warden'?'WARDEN':'WRAITH'):remaining+' SHADOWS REMAIN';
+    if(G.warden){
+      const B=G.warden.hud();h.bossWrap.classList.toggle('hidden',!B);
+      if(B){
+        h.bossName.textContent=B.name;h.bossFill.style.width=clamp(B.frac*100,0,100)+'%';h.bossSub.textContent=B.sub;h.bossAtk.textContent=B.callout?'— '+B.callout+' —':'';
+        h.bossPips.textContent=[1,2,3,4].map(i=>i<=B.pips?'◆':'◇').join(' ');
+        ['locked','open','veil','gold'].forEach(k=>h.bossWrap.classList.toggle(k,!!B[k]));
+      }
+      h.objective.textContent=G.warden.objective();
+      h.oilLabel.textContent=G.warden.fl&2?'◈ TIME LEFT':'◈ LANTERN OIL';
+      h.scoreVal.parentElement.classList.toggle('souls-pulse',!!(G.warden.fl&8)&&G.warden.s===WS.SHIFT);
+    } else {
+      const boss=G.enemies.find(e=>e.isBoss&&!e.dead);h.bossWrap.classList.toggle('hidden',!boss);
+      if(boss){h.bossName.textContent=boss.d.name;h.bossFill.style.width=clamp(boss.hp/boss.maxHp*100,0,100)+'%';h.bossSub.textContent='';h.bossAtk.textContent='';h.bossPips.textContent='';}
+      const remaining=G.enemies.length+W.spawnsLeft;h.objective.textContent=W.gateOpen?'THE STAIR IS LIT · DESCEND':boss?'EXTINGUISH THE '+(boss.type==='warden'?'WARDEN':'WRAITH'):remaining+' SHADOWS REMAIN';
+      if(h.oilLabel)h.oilLabel.textContent='◈ LANTERN OIL';
+      ['locked','open','veil','gold'].forEach(k=>h.bossWrap.classList.remove(k));h.scoreVal.parentElement.classList.remove('souls-pulse');
+    }
     h.buffRow.textContent=Object.keys(P.buffs||{}).map(k=>buffDef(k).icon+' '+buffDef(k).name+' '+Math.ceil(P.buffs[k])).join('   ');
     h.darkWarn.classList.toggle('hidden',P.oil>5||P.hp<=0);h.hint.classList.toggle('off',G.t>12);
     if(h.fuelPrompt){h.fuelPrompt.classList.toggle('hidden',!G.fuelStatus);h.fuelPrompt.textContent=G.fuelStatus||'';}

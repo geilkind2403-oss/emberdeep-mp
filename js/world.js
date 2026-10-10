@@ -47,7 +47,83 @@ const FLOOR_PROPS = [
 const PROP_KINDS = ['bones', 'urn', 'crate', 'rug', 'puddle', 'chain', 'statue', 'roots', 'candles', 'crystal', 'shrooms'];
 const LIT_PROPS = { candles: { color: '#ffb35c', r: 70 }, crystal: { color: '#7fd8ff', r: 78 }, shrooms: { color: '#9cf3a8', r: 62 } };
 
+// The Warden's Rest (floor 10): a corridor with the last candle, then a round
+// hall with eight pillars, four braziers and the throne. Geometry is fixed;
+// only the dressing comes from the seed, so every client builds the same room.
+const ARENA = { cx: 900, cy: 860, floorR: 620, corridor: { x: 760, y: 1400, w: 280, h: 930 } };
+function generateWardenArena(num, rng){
+  const C = { x: ARENA.cx, y: ARENA.cy }, deg = Math.PI / 180;
+  const obstacles = [];
+  for(let k = 0; k < 8; k++){
+    const a = (22.5 + k * 45) * deg, x = C.x + Math.cos(a) * 230, y = C.y + Math.sin(a) * 230;
+    obstacles.push({ x: x - 24, y: y - 24, w: 48, h: 48, pillar: k, dyn: true });
+  }
+  const vents = [{ x: 900, y: 2090, fuel: 90, maxFuel: 90, refillT: 0, spurtT: 0.5, active: true, seed: rng.range(0, TAU), corridor: true }];
+  [45, 135, 225, 315].forEach(function(d){
+    vents.push({ x: C.x + Math.cos(d * deg) * 540, y: C.y + Math.sin(d * deg) * 540, fuel: 0, maxFuel: rng.range(70, 90),
+      refillT: rng.range(5, 14), spurtT: rng.range(0.4, 2), active: false, seed: rng.range(0, TAU) });
+  });
+  const pickups = [{ type: 'oil', x: 840, y: 2000, val: 28, t: 0 }, { type: 'oil', x: 960, y: 2000, val: 28, t: 1 }];
+  for(let i = 0; i < 12; i++) pickups.push({ type: 'ember', x: rng.range(790, 1010), y: rng.range(1480, 2280), val: rng.int(1, 3), t: rng.range(0, 9) });
+  pickups.push({ type: 'power', kind: rng.pick(['blaze', 'haste', 'well']), x: 830, y: 1880, val: 0, t: 2 });
+  pickups.push({ type: 'power', kind: rng.pick(['blaze', 'haste', 'well']), x: 970, y: 1880, val: 0, t: 3 });
+  pickups.forEach(function(p, i){ p.id = i + 1; });
+  const props = [];
+  for(let i = 0; i < 26; i++){
+    const a = rng.range(0, TAU), r = rng.range(560, 600);
+    props.push({ kind: rng.pick(['statue', 'chain', 'bones', 'bones', 'urn']), x: C.x + Math.cos(a) * r, y: C.y + Math.sin(a) * r, a: rng.range(0, TAU), s: rng.range(0.85, 1.15), seed: rng.range(0, 99) });
+  }
+  for(let i = 0; i < 10; i++){
+    props.push({ kind: rng.pick(['bones', 'chain', 'puddle']), x: rng.range(780, 1020), y: rng.range(1500, 2300), a: rng.range(0, TAU), s: rng.range(0.8, 1.1), seed: rng.range(0, 99) });
+  }
+  props.sort(function(a, b){ return (a.kind === 'puddle' ? 0 : 1) - (b.kind === 'puddle' ? 0 : 1); });
+  const shards = [];
+  for(let i = 0; i < 7 && shards.length < 7; i++){
+    for(let tries = 0; tries < 20; tries++){
+      const a = rng.range(0, TAU), r = rng.range(150, 500), x = C.x + Math.cos(a) * r, y = C.y + Math.sin(a) * r;
+      if(!inAnyObstacle(obstacles, x, y, 40)){ shards.push({ x: x, y: y }); break; }
+    }
+  }
+  const candles = [];
+  for(let j = 0; j < 16; j++){ const a = (11.25 + j * 22.5) * deg; candles.push({ x: C.x + Math.cos(a) * 598, y: C.y + Math.sin(a) * 598 }); }
+  return {
+    num: num, w: 1800, h: 2400,
+    obstacles: obstacles, pickups: pickups, nextPickupId: pickups.length + 1,
+    vents: vents, ventCycleT: 1e9,
+    spawn: { x: 900, y: 2240 }, gate: { x: 900, y: 272 },
+    decor: [], props: props,
+    quota: 0, initial: 0, spawnInterval: 99, boss: 'warden',
+    gateOpen: false, spawnsLeft: 0, spawnT: 0,
+    arena: {
+      cx: C.x, cy: C.y, floorR: ARENA.floorR, corridor: ARENA.corridor, sealed: false,
+      throne: { x: 900, y: 372 }, candle: { x: 900, y: 1650 },
+      braziers: [0, 90, 180, 270].map(function(d){ return { x: C.x + Math.cos(d * deg) * 170, y: C.y + Math.sin(d * deg) * 170, lit: true, prog: 0 }; }),
+      candles: candles, candlesLit: 16, shards: shards, dark: 0.80, gateGlow: 0, pm: 255
+    }
+  };
+}
+// Keeps a point on the arena floor: the round hall, plus the corridor until the
+// wax wall seals it.
+function arenaClamp(W, o, pad){
+  const A = W.arena, cr = A.corridor;
+  const dx = o.x - A.cx, dy = o.y - A.cy, d = Math.hypot(dx, dy) || 1, lim = A.floorR - pad;
+  if(d <= lim) return;
+  const inCorr = !A.sealed && o.x >= cr.x + pad && o.x <= cr.x + cr.w - pad && o.y >= cr.y && o.y <= cr.y + cr.h - pad;
+  if(inCorr) return;
+  const cx = A.cx + dx / d * lim, cy = A.cy + dy / d * lim;
+  if(A.sealed){ o.x = cx; o.y = cy; return; }
+  const rx = clamp(o.x, cr.x + pad, cr.x + cr.w - pad), ry = clamp(o.y, cr.y, cr.y + cr.h - pad);
+  if(dist(o.x, o.y, rx, ry) < dist(o.x, o.y, cx, cy)){ o.x = rx; o.y = ry; }
+  else { o.x = cx; o.y = cy; }
+}
+// Removes the pillars whose bit is clear in `mask` (they burst between phases).
+function applyPillarMask(W, mask){
+  W.obstacles = W.obstacles.filter(function(o){ return o.pillar === undefined || (mask >> o.pillar) & 1; });
+  W.arena.pm = mask;
+}
+
 function generateFloor(num, rng){
+  if(num === CFG.floorMax) return generateWardenArena(num, rng);
   const w = Math.min(2300, 1500 + num * 45);
   const h = Math.min(1500, 950 + num * 30);
   const obstacles = [];

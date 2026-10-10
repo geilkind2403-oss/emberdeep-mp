@@ -34,6 +34,8 @@ class Game {
     this.embers = 0;
     this.last = 0;
     this.resetRunXp();
+    this.talkQueue = [];
+    this.talkNow = null;
     this.initInput();
     this.initButtons();
     window.addEventListener('pagehide', () => this.bankXp());
@@ -49,11 +51,14 @@ class Game {
   }
   pause(){
     if(this.state !== 'playing') return;
+    // The false ending and the closing scene keep running; the pause waits for them.
+    if(this.warden && (this.warden.s === WS.FAKE || this.warden.s === WS.RESOLVE)){ this._pauseQ = true; return; }
+    this._pauseQ = false;
     this.state = 'pause';
     document.getElementById('pauseStats').textContent = 'FLOOR ' + this.floor + ' · SCORE ' + Math.round(this.score);
     this.showScreen('screen-pause');
   }
-  resume(){ this.state = 'playing'; this.stopInput(); this.showScreen(null); }
+  resume(){ this._pauseQ = false; this.state = 'playing'; this.stopInput(); this.showScreen(null); }
   cameraOrigin(){
     const W = this.world, R = this.R;
     return {
@@ -100,6 +105,111 @@ class Game {
     this.effects.push({ kind: 'text', x, y, text, color, life: 0.9, maxLife: 0.9 });
   }
 
+  // Boss speech in an Undertale-style box: typed letter by letter with a voice
+  // blip, pausing at punctuation. o: {v voice Hz (0 = narrator), f face glyph,
+  // m 'box'|'narr'|'bark'|'soul', sp letters per second, who, local}.
+  // The host's lines are mirrored to guests.
+  talk(text, o){
+    if(!o || typeof o !== 'object') o = { v: o };
+    if(!o.local && this.coop && this.coop.isHost){
+      const msg = Object.assign({}, o);
+      delete msg.local;
+      this.coop.net.broadcast({ t: 'talk', s: text, o: msg });
+    }
+    if(o.sfx && SFX[o.sfx]) SFX[o.sfx]();
+    if(o.m === 'bark'){ if(this.warden) this.warden.bark(text, o.who); return; }
+    if(o.m === 'soul'){ this.soulLine(text); return; }
+    // A guest only ever trails the host's dialogue: a new host line retires the old ones.
+    if(o.host) this.dropHostTalk(0.25);
+    this.talkQueue.push({ text: text, v: o.v === undefined ? 140 : o.v, f: o.f || '', m: o.m || 'box', sp: o.sp || 32, who: o.who || '', host: !!o.host });
+  }
+  // Retire mirrored host lines; the current one finishes within `grace` seconds.
+  dropHostTalk(grace){
+    this.talkQueue = this.talkQueue.filter(function(q){ return !q.host; });
+    const T = this.talkNow;
+    if(!T || !T.host) return;
+    if(grace > 0 && T.toks){
+      T.shown = T.toks.length;
+      this.renderTalk(T);
+      T.hold = Math.max(T.hold, 0.9 + T.n * 0.02 - grace);
+      return;
+    }
+    this.talkNow = null;
+    const el = document.getElementById('talk');
+    if(el && !this.talkQueue.length) el.classList.add('hidden');
+  }
+  talking(){ return !!this.talkNow || this.talkQueue.length > 0; }
+  // Enter or Z: show the whole line, then move on. In co-op only the host
+  // skips, and the skip reaches everyone through the next line.
+  skipTalk(){
+    const T = this.talkNow;
+    if(!T || T.m === 'bark' || this.isGuest()) return;
+    if(T.shown < T.toks.length){ T.shown = T.toks.length; this.renderTalk(T); return; }
+    this.talkNow = null;
+    this.talkSkipped = true;
+    if(!this.talkQueue.length) document.getElementById('talk').classList.add('hidden');
+    if(this.coop && this.coop.isHost) this.coop.net.broadcast({ t: 'talk', clear: 1 });
+  }
+  clearTalk(){
+    this.talkQueue = [];
+    this.talkNow = null;
+    const el = document.getElementById('talk');
+    if(el) el.classList.add('hidden');
+  }
+  soulLine(text){
+    const el = document.getElementById('soulLine');
+    if(!el) return;
+    el.textContent = text;
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+  updateTalk(dt){
+    let T = this.talkNow;
+    const box = document.getElementById('talk');
+    if(!T){
+      if(!this.talkQueue.length) return;
+      T = this.talkNow = Object.assign(this.talkQueue.shift(), { shown: 0, wait: 0, hold: 0 });
+      T.toks = talkTokens(T.text);
+      T.n = T.toks.filter(function(k){ return k.ch; }).length;
+      box.classList.remove('hidden');
+      box.classList.toggle('talk--narr', T.m === 'narr');
+      box.querySelector('.talk-face').textContent = T.f || '';
+    }
+    if(T.shown < T.toks.length){
+      T.wait -= dt;
+      while(T.wait <= 0 && T.shown < T.toks.length){
+        const tok = T.toks[T.shown++];
+        T.wait += talkCharDelay(tok, T.sp);
+        if(!tok.ch || tok.ch === ' ' || tok.ch === '.') continue;
+        if(T.who === 'T' && SFX.voiceT) SFX.voiceT();
+        else if(T.v) SFX.voice(T.v);
+        else if(T.shown % 2 && SFX.narrClick) SFX.narrClick();
+      }
+      this.renderTalk(T);
+      return;
+    }
+    T.hold += dt;
+    if(T.hold > 0.9 + T.n * 0.02){
+      this.talkNow = null;
+      if(!this.talkQueue.length) box.classList.add('hidden');
+    }
+  }
+  renderTalk(T){
+    const esc = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }, cls = { b: 'c-b', o: 'c-o', y: 'c-y', s: 'shake' };
+    let html = '', open = '';
+    for(let i = 0; i < T.shown; i++){
+      const tok = T.toks[i];
+      if(!tok.ch) continue;
+      const c = cls[tok.cls] || '';
+      if(c !== open){ if(open) html += '</span>'; if(c) html += '<span class="' + c + '">'; open = c; }
+      const ch = esc[tok.ch] || tok.ch;
+      html += c === 'shake' ? '<i style="animation-delay:-' + (i % 7) * 0.07 + 's">' + ch + '</i>' : ch;
+    }
+    if(open) html += '</span>';
+    document.getElementById('talkText').innerHTML = html;
+  }
+
   toast(text){
     const el = document.getElementById('toast');
     if(!el) return;
@@ -111,7 +221,7 @@ class Game {
 
   initInput(){
     const kmap = {};
-    ['KeyW','KeyA','KeyS','KeyD','KeyE','KeyQ','Space','ShiftLeft','ShiftRight','KeyP','Escape'].forEach(function(code){ kmap[code] = true; });
+    ['KeyW','KeyA','KeyS','KeyD','KeyE','KeyQ','KeyZ','Enter','Space','ShiftLeft','ShiftRight','KeyP','Escape'].forEach(function(code){ kmap[code] = true; });
     window.addEventListener('keydown', (e) => {
       if(!kmap[e.code] || e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
@@ -123,6 +233,7 @@ class Game {
         e.preventDefault();
       }
       if(e.code === 'Space' && this.state === 'playing') e.preventDefault();
+      if((e.code === 'Enter' || e.code === 'KeyZ') && !e.repeat && this.state === 'playing') this.skipTalk();
     });
     window.addEventListener('keyup', (e) => { this.keys[e.code] = false; });
     this.canvas.addEventListener('mousemove', (e) => {
@@ -164,6 +275,7 @@ class Game {
     $('btnClass').addEventListener('click', function(){ SFX.click(); game.showClassPicker(); });
     $('btnClassBack').addEventListener('click', function(){ SFX.click(); game.showScreen('screen-title'); });
     $('btnTree').addEventListener('click', function(){ SFX.click(); game.showTree(); });
+    $('btnFakeOn').addEventListener('click', function(){ this.textContent = 'THERE IS NOWHERE LEFT TO DESCEND'; SFX.snuff(); });
     $('btnTreeBack').addEventListener('click', function(){ SFX.click(); game.showScreen('screen-title'); });
     $('btnTreeReset').addEventListener('click', function(){
       SFX.click();
@@ -314,15 +426,15 @@ class Game {
     const skins = document.getElementById('treeSkins');
     skins.innerHTML = '';
     SKINS.forEach(function(S){
-      const unlocked = S.lvl <= info.level;
+      const unlocked = Progress.skinUnlocked(cls, S.id);
       const b = el('button', 'skin' + (prog.skin === S.id ? ' on' : '') + (unlocked ? '' : ' locked'));
       b.type = 'button';
       b.disabled = !unlocked;
       const sw = el('i', 'swatch');
       sw.style.background = 'linear-gradient(135deg,' + S.cloak[0] + ',' + S.cloak[1] + ' 55%,' + S.fire.mid + ')';
       b.appendChild(sw);
-      b.appendChild(el('span', '', unlocked ? S.name : 'LV ' + S.lvl));
-      b.title = S.name + (unlocked ? '' : ' · unlocks at level ' + S.lvl);
+      b.appendChild(el('span', '', unlocked ? S.name : S.flag ? '???' : 'LV ' + S.lvl));
+      b.title = unlocked ? S.name : S.flag ? 'Found at the bottom of the deep.' : S.name + ' · unlocks at level ' + S.lvl;
       b.addEventListener('click', function(){
         if(!Progress.setSkin(cls, S.id)) return;
         SFX.click();
@@ -375,6 +487,9 @@ class Game {
     this.score = 0;
     this.embers = 0;
     this.resetRunXp();
+    this.runKills = 0;
+    this.wardenEnding = null;
+    this._pauseQ = false;
     this.runSeed = this.coop ? this.coop.onRunStart() : (Date.now() >>> 0);
     this.nextFloor();
   }
@@ -471,6 +586,7 @@ class Game {
   // Solo: the run ends. Co-op: the keeper falls and watches until the team slays
   // the next boss; the run ends once every keeper has fallen.
   keeperDown(p){
+    if(this.warden && this.warden.brain && this.warden.brain.onKeeperDown(p)) return;
     p.hp = 0;
     if(!this.coop){ this.gameOver(); return; }
     p.alive = false; p.flameOn = false; p.buffs = {};
@@ -481,7 +597,9 @@ class Game {
     this.checkTeamWipe();
   }
   checkTeamWipe(){
-    if(this.state === 'playing' && !this.allPlayers().some(function(k){ return k.alive !== false; })) this.gameOver();
+    if(this.state !== 'playing' || this.allPlayers().some(function(k){ return k.alive !== false; })) return;
+    if(this.warden && this.warden.brain && this.warden.brain.onTeamWipe()) return;
+    this.gameOver();
   }
   // A slain boss brings fallen keepers back next to `at` with full vigor and oil;
   // the fall costs them two random boon levels.
@@ -527,9 +645,19 @@ class Game {
     const W = this.world;
     p.x = clamp(p.x, 18, W.w - 18);
     p.y = clamp(p.y, 18, W.h - 18);
-    for(let i = 0; i < W.obstacles.length; i++){
-      const hit = resolveCircleRect(p.x, p.y, 13, W.obstacles[i]);
-      if(hit){ p.x += hit.dx; p.y += hit.dy; }
+    if(W.arena) arenaClamp(W, p, 13);
+    const passes = W.arena ? 2 : 1;
+    for(let pass = 0; pass < passes; pass++){
+      for(let i = 0; i < W.obstacles.length; i++){
+        const hit = resolveCircleRect(p.x, p.y, 13, W.obstacles[i]);
+        if(hit){ p.x += hit.dx; p.y += hit.dy; }
+      }
+      // The Ward is the bullet box: nobody leaves it while it stands.
+      const V = this.warden, br = V ? V.boxR() : Infinity;
+      if(br < 2000){
+        const C = WARDEN.C, dx = p.x - C.x, dy = p.y - C.y, d = Math.hypot(dx, dy) || 1, lim = br - 13;
+        if(d > lim){ p.x = C.x + dx / d * lim; p.y = C.y + dy / d * lim; }
+      }
     }
   }
   // Host side: guests move their own keeper, the host eases toward the reported
@@ -546,6 +674,7 @@ class Game {
         m.y += (inp.y - m.y) * k;
       }
       if(inp.mx || inp.my) m.walk = (m.walk || 0) + dt * 16;
+      m.moving = !!(inp.mx || inp.my) || inp.dashT > 0;
       m.dashT = inp.dashT;
       this.actKeeper(m, inp, dt);
     }
@@ -559,10 +688,16 @@ class Game {
     const inp = this.localInput();
     P.aim = inp.aim;
     const live = coop.hostState === 'playing' && P.alive !== false;
+    const locked = this.warden && this.warden.locksActions();
     if(live) this.moveKeeper(P, inp, dt);
-    P.flameOn = live && inp.fire && P.oil > 0;
+    P.flameOn = live && !locked && inp.fire && P.oil > 0;
     this.flameSound(P.flameOn);
     if(P.flameOn) this.emitFlame(P, dt);
+    if(this.warden){
+      if(live && !locked && inp.surge && !this._surgeHeld && P.surgeCdT <= 0 && P.oil > 0) this.warden.clearAt(P.x, P.y, P.surge.r * 0.6, true);
+      this._surgeHeld = inp.surge;
+      this.warden.update(dt);
+    }
     coop.smooth(dt);
     coop.refreshBanner();
     this.fuelStatus = this.fuelPrompt(P);
@@ -587,11 +722,17 @@ class Game {
     this.zones = [];
     this.particles = [];
     this.effects = []; this.trails = []; this.hurtT = 0;
+    this.clearTalk();
     this._trailClock = 0;
     this.P = this.P || this.makePlayer(this.cls);
     if(this.coop && !guest) this.coop.syncMates();
+    if(this.warden) this.leaveWarden();
+    this.warden = W.arena ? new WardenView(this) : null;
+    if(!W.arena && window.Music) Music.stop(1);
+    this.inputLock = false;
     const keepers = this.allPlayers();
     keepers.forEach((p, i) => {
+      p.candleUsed = false; p.refused = false; p._wHit = null; p._wViol = null; p.owT = 0; p.lowered = false;
       this.placeKeeper(p, i, keepers.length);
       p.surgeT = p.surgeCdT = p.dashT = p.dashCdT = p.invulnT = 0;
       p.snuffT = 0;
@@ -624,7 +765,11 @@ class Game {
       const s = spreadSpot(W, this.rng, keepers, this.enemies, 380, Infinity);
       this.spawnEnemy(pickMobType(this.floor, this.rng), s.x, s.y);
     }
-    if(W.boss){
+    if(W.arena){
+      const e = new Enemy(this, 'warden', W.arena.throne.x, W.arena.throne.y);
+      this.enemies.push(e);
+      new WardenBrain(this, e, this.warden);
+    } else if(W.boss){
       const spot = freeSpot(W.w, W.h, W.obstacles, this.rng, 400, P.x, P.y, ENEMY_DEFS[W.boss].r + 5);
       this.enemies.push(new Enemy(this, W.boss, spot.x, spot.y));
       SFX.bossRoar();
@@ -673,6 +818,7 @@ class Game {
   killEnemy(e, killer){
     if(e.dead) return;
     e.dead = true;
+    if(!e.isBoss) this.runKills = (this.runKills || 0) + 1;
     const K = killer || this.P;
     this.score += e.d.pts;
     this.embers += Math.round(e.d.ember * ((K && K.greed) || 1));
@@ -719,11 +865,12 @@ class Game {
   damagePlayer(amount, src, target){
     const P = target || this.P, local = P === this.P;
     if(!P || P.hp <= 0 || P.invulnT > 0 || P.dashT > 0) return;
+    if(this.warden && this.warden.calm()) return;
     if(P.buffs.aegis > 0){
       this.burst(P.x, P.y, POWERUPS.aegis.color, 0.8, 6, 3, 0.35);
       P.invulnT = 0.25;
       if(P.spikeT > 0 && src && !src.dead && src.hp !== undefined){
-        src.hp -= P.spikeDmg;
+        this.hurtEnemy(src, P.spikeDmg, 'thorns', P.spikeBy || P);
         src.flash = 0.3;
         if(src.hp <= 0) this.killEnemy(src, P.spikeBy || P);
       }
@@ -735,6 +882,7 @@ class Game {
       P.invulnT = P.invuln;
       return;
     }
+    if(this.warden && this.warden.brain && this.warden.brain.beforeLethal(P, amount)) return;
     P.hp -= amount;
     P.invulnT = Math.max(P.invulnT, P.invuln);
     if(src && src.kb){
@@ -750,7 +898,7 @@ class Game {
     }
     this.burst(P.x, P.y, '#ff4d6d', 1, 10, 4, 0.5);
     if(P.thorns > 0 && src && !src.dead && src.hp !== undefined){
-      src.hp -= P.thorns;
+      this.hurtEnemy(src, P.thorns, 'thorns', P);
       if(src.hp <= 0) this.killEnemy(src, P);
     }
     if(P.hp <= 0) this.keeperDown(P);
@@ -775,6 +923,7 @@ class Game {
   gameOver(){
     this.state = 'over';
     SFX.over();
+    this.leaveWarden();
     this.bankXp();
     const s = this.fillStats('overStats', [['FLOOR', this.floor], ['SCORE', Math.round(this.score)], ['EMBERS', Math.round(this.embers)]].concat(this.xpRows()));
     if(this.score > this.best){
@@ -791,7 +940,7 @@ class Game {
 
   victory(){
     this.state = 'victory';
-    SFX.win();
+    if(this.wardenEnding !== 'slain') SFX.win();
     this.xpBonus += XP_VICTORY;
     this.bankXp();
     if(this.score > this.best){
@@ -799,12 +948,29 @@ class Game {
       try{ localStorage.setItem('emberdeep_best', String(this.best)); }catch(e){}
     }
     this.fillStats('vicStats', [['SCORE', Math.round(this.score)], ['EMBERS', Math.round(this.embers)]].concat(this.xpRows()));
+    const end = this.wardenEnding, $ = function(id){ return document.getElementById(id); };
+    $('vicEyebrow').textContent = end === 'spared' ? 'AND THE DEEP REMEMBERS WARMTH' : 'AND THE DEEP REMEMBERS LIGHT';
+    $('vicTitle').textContent = end === 'spared' ? 'THE WARDEN RESTS' : 'THE WARDEN FALLS';
+    $('vicSub').textContent = end === 'spared'
+      ? 'Tallow carries your flame up the stair. One by one, the beacons wake. Somewhere far above, someone sees a light, and is not afraid.'
+      : end === 'slain' ? 'The stair blazes like a struck sun. The deep is lit from the bottom up. There is no one left down here to see it.'
+      : 'The stair blazes like a struck sun. For the first time in a thousand years, the deep is lit from the bottom up.';
+    if(end){
+      const skin = end === 'spared' ? 'tallow' : 'cinder';
+      if(!Progress.data.flags[skin]){
+        Progress.data.flags[skin] = true;
+        Progress.save();
+        this.fillStats('vicStats', [['SCORE', Math.round(this.score)], ['EMBERS', Math.round(this.embers)]].concat(this.xpRows(), [['NEW SKIN', skinById(skin).name]]));
+      }
+    }
     this.showScreen('screen-victory');
     if(this.coop && this.coop.isHost) this.coop.onEnd('victory');
   }
 
   toTitle(){
     this.bankXp();
+    this.clearTalk();
+    this.leaveWarden();
     if(this.coop) this.coop.onTitle();
     this.state = 'title';
     this.world = null;
@@ -817,6 +983,18 @@ class Game {
     this.showScreen('screen-title');
   }
 
+  // Leaving the arena: the music and the scene dressing stop with it.
+  leaveWarden(){
+    if(window.Music) Music.stop(0.6);
+    if(SFX.droneTo) SFX.droneTo(0.045, 1);
+    this.inputLock = false;
+    const lb = document.getElementById('letterbox'), fv = document.getElementById('fakeVictory');
+    if(lb) lb.classList.remove('on');
+    if(fv) fv.classList.add('hidden');
+    ['fade', 'bossCard'].forEach(function(id){ const el = document.getElementById(id); if(el) el.classList.remove('on'); });
+    document.body.classList.remove('warden-scene');
+    document.title = 'EMBERDEEP — A Descent in the Dark';
+  }
   updateBestLine(){
     const el = document.getElementById('bestLine');
     if(el) el.textContent = this.best > 0 ? 'BEST  ' + this.best : '';
@@ -945,9 +1123,9 @@ class Game {
 
     W.ventCycleT -= dt;
     if(W.ventCycleT <= 0){
-      const sleeping = W.vents.filter(function(v){ return !v.active; });
-      const target = sleeping.length ? pick(sleeping) : pick(W.vents);
-      this.wakeFuelVent(target, true);
+      const sleeping = W.vents.filter(function(v){ return !v.active && !v.dead; });
+      const target = sleeping.length ? pick(sleeping) : pick(W.vents.filter(function(v){ return !v.dead; }));
+      if(target) this.wakeFuelVent(target, true);
       W.ventCycleT = rand(8, 15);
     }
 
@@ -955,6 +1133,7 @@ class Game {
     let hasActive = false;
     for(let i = 0; i < W.vents.length; i++){
       const v = W.vents[i];
+      if(v.dead) continue;
       if(v.active && v.fuel > 0){
         hasActive = true;
         v.spurtT -= dt;
@@ -995,8 +1174,9 @@ class Game {
         if(v.refillT <= 0) this.wakeFuelVent(v, true);
       }
     }
-    if(!hasActive){
-      const next = W.vents.reduce(function(a, b){ return a.refillT < b.refillT ? a : b; });
+    const alive = W.vents.filter(function(v){ return !v.dead; });
+    if(!hasActive && alive.length){
+      const next = alive.reduce(function(a, b){ return a.refillT < b.refillT ? a : b; });
       this.wakeFuelVent(next, false);
     }
     this.fuelStatus = this.fuelPrompt(this.P);
@@ -1018,6 +1198,7 @@ class Game {
 
   localInput(){
     const k = this.keys, P = this.P, origin = this.cameraOrigin();
+    if(this.inputLock) return { mx: 0, my: 0, aim: P.aim, fire: false, surge: false, dash: false, ability: false, alt: false, ult: false, tx: P.x, ty: P.y };
     return {
       mx: (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0),
       my: (k.KeyS ? 1 : 0) - (k.KeyW ? 1 : 0),
@@ -1038,8 +1219,17 @@ class Game {
   }
   followCamera(dt){
     const P = this.focusKeeper(), follow = this.R.reducedMotion ? 1 : 1 - Math.exp(-12 * dt);
-    this.cam.x = lerp(this.cam.x, P.x, follow);
-    this.cam.y = lerp(this.cam.y, P.y, follow);
+    let tx = P.x, ty = P.y;
+    const V = this.warden;
+    if(V && V.fightActive()){
+      const br = Math.min(V.boxR(), WARDEN.openR), k = 2 * br + 100 <= Math.min(this.R.w, this.R.h) ? 0.6 : 0.25;
+      const e = V.locksActions() && this.enemies.find(function(x){ return x.type === 'warden'; });
+      // Scenes frame the speaker; fights lean toward the middle of the hall.
+      if(e){ tx = lerp(P.x, e.x, 0.5); ty = lerp(P.y, e.y, 0.5); }
+      else { tx = lerp(P.x, WARDEN.C.x, k); ty = lerp(P.y, WARDEN.C.y, k); }
+    }
+    this.cam.x = lerp(this.cam.x, tx, follow);
+    this.cam.y = lerp(this.cam.y, ty, follow);
   }
   flameSound(on){
     if(on && !this._flameOn) SFX.flameOn();
@@ -1051,6 +1241,8 @@ class Game {
   moveKeeper(p, inp, dt){
     const local = p === this.P;
     const mvl = Math.hypot(inp.mx, inp.my);
+    p.moving = mvl > 0 || p.dashT > 0;
+    if(local && this.warden) this.warden.pullAt(p, dt);
     p.aim = inp.aim;
     if(mvl) p.walk = (p.walk || 0) + dt * 16;
     if(p.dashT > 0 && local && !this.R.reducedMotion){
@@ -1084,7 +1276,10 @@ class Game {
 
   // Timers, surge, flame, oil and darkness. Host only: this is where damage happens.
   actKeeper(p, inp, dt){
-    const local = p === this.P;
+    const local = p === this.P, V = this.warden;
+    if(V && V.locksActions()) inp = Object.assign({}, inp, { fire: false, surge: false, ability: false, alt: false, ult: false });
+    else if(V && V.blocksUlt()) inp = Object.assign({}, inp, { ult: false, ability: V.s === WS.MERCY ? false : inp.ability });
+    const calm = V && V.calm();
     p.aim = inp.aim;
     p.surgeT = Math.max(0, p.surgeT - dt);
     p.surgeCdT = Math.max(0, p.surgeCdT - dt);
@@ -1104,7 +1299,7 @@ class Game {
     if(inp.ult && p.ultOn && p.ult >= 100) this.useUlt(p, inp);
     if(inp.surge && p.surgeCdT <= 0 && p.oil > 0) this.surge(p);
 
-    if(!freeOil) p.oil = Math.max(0, p.oil - CFG.drain * dt);
+    if(!freeOil && !calm) p.oil = Math.max(0, p.oil - CFG.drain * dt);
     p.flameOn = !!inp.fire && p.oil > 0;
     if(p.flameOn){
       if(!freeOil) p.oil = Math.max(0, p.oil - p.flame.cost * dt);
@@ -1116,8 +1311,9 @@ class Game {
       this.burnCone(p, dt);
     }
 
-    if(p.oil <= 0){
+    if(p.oil <= 0 && !calm){
       p.oil = 0;
+      if(V && V.brain && V.brain.beforeLethal(p, CFG.darkDps * dt)) return;
       p.hp -= CFG.darkDps * dt;
       if(p.hp <= 0) this.keeperDown(p);
     }
@@ -1132,6 +1328,7 @@ class Game {
     }
     this.burst(p.x, p.y, '#ffd98a', 1.5, 24, 6, 0.9);
     this.blast(p, p.surge.r, p.surge.dmg, p.surge.kb);
+    if(this.warden) this.warden.clearAt(p.x, p.y, p.surge.r * 0.6);
   }
   // Damages and shoves every enemy within `r` of `at` (default: the keeper `p`,
   // who also gets the kill) and snuffs enemy shots there.
@@ -1143,7 +1340,7 @@ class Game {
       if(e.dead) continue;
       const d = dist(at.x, at.y, e.x, e.y);
       if(d < r + e.r){
-        e.hp -= dmg;
+        this.hurtEnemy(e, dmg, 'blast', p);
         e.flash = 0.3;
         const dx = e.x - at.x, dy = e.y - at.y;
         const dd = Math.hypot(dx, dy) || 1;
@@ -1262,7 +1459,7 @@ class Game {
       this.abilityFx(p.x, p.y, POWERUPS.aegis.color, 330);
     } else if(p.cls === 'nightblade'){
       const dmg = (60 + 10 * f) * pow * this.dmgMult(p), near = e => dist(p.x, p.y, e.x, e.y);
-      const targets = this.enemies.filter(e => !e.dead && near(e) < 520).sort((a, b) => near(a) - near(b)).slice(0, 6 + (sk.c3 || 0));
+      const targets = this.enemies.filter(e => !e.dead && !e.untargetable && near(e) < 520).sort((a, b) => near(a) - near(b)).slice(0, 6 + (sk.c3 || 0));
       this.abilityFx(p.x, p.y, '#b18cff', 70);
       targets.forEach(e => {
         if(e.dead) return;
@@ -1284,6 +1481,14 @@ class Game {
   // Flame and skill damage bonus from Nightfall and Dawnbreak.
   dmgMult(p){
     return (p.buffs.night > 0 ? p.nightMult || 1 : 1) * (p.buffs.dawn > 0 ? 1.3 : 1);
+  }
+  // Every hit on a shadow goes through here: a boss can be shielded (talking,
+  // changing phase) or held at an HP floor until its script lets it fall.
+  hurtEnemy(e, dmg, src, by){
+    if(e.brain){ dmg = e.brain.onHurt(dmg, src || 'misc', by); if(!(dmg > 0)) return; }
+    else if(e.shieldT > 0) return;
+    e.hp -= dmg;
+    if(e.hpFloor > 0 && e.hp < e.hpFloor) e.hp = e.hpFloor;
   }
   stun(e, t){ if(!e.isBoss) e.stunT = Math.max(e.stunT || 0, t); }
   ignite(e, dps, t, by){
@@ -1308,7 +1513,7 @@ class Game {
       if(e.dead) continue;
       const rx = e.x - p.x, ry = e.y - p.y, along = rx * ex + ry * ey;
       if(along < 0 || along > reach + e.r || Math.abs(rx * ey - ry * ex) > width + e.r) continue;
-      e.hp -= dmg;
+      this.hurtEnemy(e, dmg, 'beam', p);
       e.flash = 0.3;
       if(e.hp <= 0){ this.killEnemy(e, p); continue; }
       if(burnDps) this.ignite(e, burnDps, 3, p);
@@ -1322,7 +1527,7 @@ class Game {
       if(e.dead) continue;
       const dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy) || 1;
       if(d > range + e.r || Math.abs(angleDiff(Math.atan2(dy, dx), ang)) > half + e.r / d) continue;
-      e.hp -= dmg;
+      this.hurtEnemy(e, dmg, 'melee', p);
       e.flash = 0.3;
       e.kb.x += dx / d * kb;
       e.kb.y += dy / d * kb;
@@ -1387,7 +1592,7 @@ class Game {
         if(e.dead) continue;
         const d = dist(z.x, z.y, e.x, e.y);
         if(d > z.r + e.r) continue;
-        e.hp -= z.dps * dt;
+        this.hurtEnemy(e, z.dps * dt, 'zone', z.owner);
         e.flash = Math.max(e.flash, 0.15);
         if(z.slow) e.slowT = 0.25;
         if(z.pull && !e.isBoss && d > 12){ e.x += (z.x - e.x) / d * z.pull * dt; e.y += (z.y - e.y) / d * z.pull * dt; }
@@ -1443,7 +1648,7 @@ class Game {
       const ea = Math.atan2(dy, dx);
       if(Math.abs(angleDiff(ea, p.aim)) > p.flame.half + e.r / (d || 1)) continue;
       const crit = Math.random() < (p.flame.crit || 0);
-      e.hp -= dmg * (crit ? p.flame.critMult : 1);
+      this.hurtEnemy(e, dmg * (crit ? p.flame.critMult : 1), 'flame', p);
       e.flash = Math.max(e.flash, 0.2);
       e.kb.x += dx / (d || 1) * p.flame.kb * dt;
       e.kb.y += dy / (d || 1) * p.flame.kb * dt;
@@ -1458,7 +1663,12 @@ class Game {
   update(dt){
     if(this.state !== 'playing') return;
     this.t += dt;
+    this.updateTalk(dt);
     if(this.isGuest()){ this.updateGuest(dt); return; }
+    if(this._pauseQ && !(this.warden && (this.warden.s === WS.FAKE || this.warden.s === WS.RESOLVE))){
+      this.pause();
+      if(this.state !== 'playing') return;
+    }
     const W = this.world, P = this.P;
     if(!W || !P || P.hp <= 0 && !this.coop) return;
 
@@ -1483,6 +1693,7 @@ class Game {
       }
     }
     this.updateZones(dt);
+    if(this.warden){ this.warden.update(dt); if(this.state !== 'playing') return; }
     this.enemies = this.enemies.filter(function(e){ return !e.dead; });
 
     W.spawnT -= dt;
@@ -1546,7 +1757,7 @@ class Game {
           const e = this.enemies[ei];
           if(e.dead || s.hit.indexOf(e.id) >= 0 || dist(s.x, s.y, e.x, e.y) >= s.r + e.r) continue;
           s.hit.push(e.id);
-          e.hp -= s.dmg;
+          this.hurtEnemy(e, s.dmg, 'shot', s.owner);
           e.flash = 0.25;
           e.kb.x += s.vx * 0.25; e.kb.y += s.vy * 0.25;
           this.burst(s.x, s.y, s.color, 0.5, 5, 3, 0.3);

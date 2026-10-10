@@ -232,7 +232,13 @@ Coop.prototype.syncMates = function(){
 Coop.prototype.onPeerJoined = function(id){
   if(!this.active()) return;
   this.syncMates();
-  const m = this.mates.get(id);
+  const m = this.mates.get(id), g = this.game;
+  if(m && g.world && g.world.arena && g.world.arena.sealed){
+    const R = Math.min(g.warden.boxR(), WARDEN.openR);
+    m.x = WARDEN.C.x; m.y = WARDEN.C.y + R - 70;
+    g.constrainKeeper(m);
+    m.tp = (m.tp || 0) + 1;
+  }
   this.net.sendTo(id, { t: 'start' });
   this.net.sendTo(id, this.floorMsg());
   this.pickupSig = '';
@@ -322,7 +328,7 @@ Coop.prototype.tickBoons = function(){
 Coop.prototype.onStatsChanged = function(){
   this.net.broadcast({ t: 'stats', keepers: this.game.allPlayers().map(this.keeperStats, this) });
 };
-Coop.prototype.onEnd = function(kind){ this.net.broadcast({ t: 'end', kind: kind }); };
+Coop.prototype.onEnd = function(kind){ this.net.broadcast({ t: 'end', kind: kind, ending: this.game.wardenEnding || '' }); };
 Coop.prototype.inputFor = function(m){
   const inp = this.inputs[m.id];
   if(!inp) return { mx: 0, my: 0, aim: m.aim, fire: false, surge: false, dashT: 0 };
@@ -352,10 +358,12 @@ Coop.prototype.snapshot = function(){
       if(e.burnT > 0) o.bu = 1;
       return o;
     }),
-    shots: g.shots.map(function(s){ return [r(s.x), r(s.y), r(s.vx), r(s.vy), s.r, COOP_SHOT_KINDS.indexOf(s.kind), s.color]; }),
+    shots: g.shots.filter(function(s, i, all){ return s.kind === 'orb' || s.kind === 'shard' || all.length - i <= 30; })
+      .map(function(s){ return [r(s.x), r(s.y), r(s.vx), r(s.vy), s.r, COOP_SHOT_KINDS.indexOf(s.kind), s.color]; }),
     zones: g.zones.map(function(z){ return [r(z.x), r(z.y), z.r, r1(z.t), z.max, COOP_ZONE_KINDS.indexOf(z.kind)]; }),
-    vents: W.vents.map(function(v){ return [v.active ? 1 : 0, r(v.fuel), r1(v.refillT || 0)]; })
+    vents: W.vents.map(function(v){ return [v.active ? 1 : 0, r(v.fuel), r1(v.refillT || 0), v.dead ? 1 : 0]; })
   };
+  if(g.warden) msg.wb = g.warden.snap();
   const sig = W.pickups.length + ':' + W.pickups.reduce(function(a, p){ return a + p.x * 3 + p.y; }, 0);
   if(sig !== this.pickupSig){
     this.pickupSig = sig;
@@ -396,12 +404,13 @@ Coop.prototype.sendInput = function(){
     mx: live ? (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) : 0,
     my: live ? (k.KeyS ? 1 : 0) - (k.KeyW ? 1 : 0) : 0,
     a: Math.round(P.aim * 100) / 100, f: live && P.flameOn ? 1 : 0, s: surge ? 1 : 0,
-    dt: Math.round(P.dashT * 100) / 100 });
+    dt: Math.round(P.dashT * 100) / 100, lv: g.state === 'playing' ? 1 : 0 });
 };
 Coop.prototype.onMessage = function(msg, from){
   if(this.isHost){
     if(msg.t === 'in'){ msg.at = performance.now(); this.inputs[from] = msg; }
     else if(msg.t === 'pick' && this.mates.has(from)) this.resolvePick(this.mates.get(from), msg.id);
+    else if(msg.t === 'ow' && this.mates.has(from) && this.game.warden && this.game.warden.brain) this.game.warden.brain.onGuestHit(this.mates.get(from), msg.p, msg.i);
     return;
   }
   if(msg.t === 'start'){ this.beginGuestRun(); return; }
@@ -414,13 +423,26 @@ Coop.prototype.onMessage = function(msg, from){
     g.showUpgrade(msg.ids);
   }
   else if(msg.t === 'stats') this.applyKeeperStats(msg.keepers);
-  else if(msg.t === 'end'){ if(msg.kind === 'victory') g.victory(); else g.gameOver(); }
+  else if(msg.t === 'end'){
+    if(msg.ending) g.wardenEnding = msg.ending;
+    if(msg.kind === 'victory') g.victory(); else g.gameOver();
+  }
   else if(msg.t === 'title'){
     this.endRun();
     g.toTitle();
     this.uiStatus('Der Host ist zurück in der Lobby — warte auf den nächsten Start.');
   }
   else if(msg.t === 'say') g.toast(msg.msg || '');
+  else if(msg.t === 'talk'){
+    if(msg.clear && msg.all) g.clearTalk();
+    else if(msg.clear) g.dropHostTalk(0);
+    else {
+      const o = Object.assign({}, msg.o || { v: msg.v }, { local: true });
+      if(!o.own) o.host = 1;
+      g.talk(String(msg.s || ''), o);
+    }
+  }
+
   else if(msg.t === 'fx' && msg.k === 'beam'){
     g.effects.push({ kind: 'beam', x: msg.x, y: msg.y, x2: msg.x2, y2: msg.y2, color: msg.c, life: 0.3, maxLife: 0.3 });
     if(g.P && dist(g.P.x, g.P.y, msg.x, msg.y) < 700) SFX.alt();
@@ -481,7 +503,7 @@ Coop.prototype.onFloorMsg = function(msg){
     if(p !== g.P) self.mates.set(k.id, p);
   });
   g.cam = { x: g.P.x, y: g.P.y };
-  if(g.world.boss) SFX.bossRoar();
+  if(g.world.boss && !g.world.arena) SFX.bossRoar();
   this.uiStatus('Floor ' + msg.floor + ' — gleiche Karte wie beim Host.');
 };
 // Stats change on revival (boons are lost); positions come with the snapshots.
@@ -518,8 +540,9 @@ Coop.prototype.applyState = function(s){
   });
   s.vents.forEach(function(a, i){
     const v = W.vents[i];
-    if(v){ v.active = !!a[0]; v.fuel = a[1]; v.refillT = a[2]; }
+    if(v){ v.active = !!a[0]; v.fuel = a[1]; v.refillT = a[2]; v.dead = !!a[3]; }
   });
+  if(s.wb && g.warden) g.warden.apply(s.wb);
   if(s.pickups) this.applyPickups(s.pickups, fresh);
 };
 Coop.prototype.applyKeepers = function(list, fresh){
@@ -607,6 +630,7 @@ Coop.prototype.refreshBanner = function(){
 };
 Coop.prototype.reviveHint = function(){
   const g = this.game, boss = g.enemies.find(function(e){ return e.isBoss; });
+  if(g.warden) return g.warden.s === WS.KINDLE ? 'FIND YOUR SOUL · THEY CAN KINDLE YOU' : 'BACK AT THE NEXT PHASE';
   if(boss) return 'BACK WHEN ' + boss.d.name + ' FALLS';
   let n = g.floor + 1;
   while(!bossForFloor(n)) n++;

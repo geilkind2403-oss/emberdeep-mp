@@ -116,8 +116,14 @@ const SKINS = [
   { id: 'moon', name: 'MOONLIT', lvl: 15, cloak: ['#1c2742', '#53699e', '#b8c8ee'], hood: '#dbe4ff', trim: '#9fb6ff', lamp: '#8fd0ff',
     fire: { core: '#e8f6ff', mid: '#8fd0ff', edge: '#3f7dff', tail: '#2a4fd0', glow: '#bfe6ff', sparks: ['#9fd8ff', '#4a8dff', '#e2f3ff'] } },
   { id: 'sun', name: 'SUNFORGED', lvl: 20, cloak: ['#5a4316', '#c39a3c', '#ffe39b'], hood: '#fff1c9', trim: '#ffd36b', lamp: '#fff0a8', aura: true,
-    fire: { core: '#ffffff', mid: '#fff0a0', edge: '#ffc43d', tail: '#ff9a1f', glow: '#fff6cf', sparks: ['#fff3c0', '#ffc43d', '#ffffff'] } }
+    fire: { core: '#ffffff', mid: '#fff0a0', edge: '#ffc43d', tail: '#ff9a1f', glow: '#fff6cf', sparks: ['#fff3c0', '#ffc43d', '#ffffff'] } },
+  // Earned at the bottom of the deep, for every class: one per ending.
+  { id: 'tallow', name: "TALLOW'S WICK", lvl: 1, flag: 'tallow', cloak: ['#2a1d3d', '#6b4a9a', '#c9b2ef'], hood: '#e6dcff', trim: '#ffd36b', lamp: '#ffe14d',
+    fire: { core: '#ffffff', mid: '#ffe14d', edge: '#ffb347', tail: '#c98a2a', glow: '#fff3b0', sparks: ['#ffe14d', '#fff3b0', '#ffffff'] } },
+  { id: 'cinder', name: 'CINDERBORN', lvl: 1, flag: 'cinder', cloak: ['#0b0b0e', '#2b2328', '#5a4a4f'], hood: '#9a8f92', trim: '#ff6a3d', lamp: '#ff6a3d',
+    fire: { core: '#ffe0d0', mid: '#ff6a3d', edge: '#c42a12', tail: '#5a0a05', glow: '#ff9a7a', sparks: ['#ff6a3d', '#3a2a2a', '#ffb39a'] } }
 ];
+function skinOpen(S, lv){ return S.flag ? !!(Progress.data && Progress.data.flags && Progress.data.flags[S.flag]) : S.lvl <= lv; }
 function skinById(id){ return SKINS.find(function(s){ return s.id === id; }) || SKINS[0]; }
 
 // Clamps a tree (possibly from another player) to valid ranks, a filled
@@ -147,7 +153,7 @@ function treeSpent(tree){
 const Progress = {
   data: null,
   blank(){
-    const d = { v: 1, classes: {} };
+    const d = { v: 1, classes: {}, flags: {} };
     CLASS_IDS.forEach(function(id){ d.classes[id] = { xp: 0, tree: {}, skin: 'ash' }; });
     return d;
   },
@@ -155,6 +161,8 @@ const Progress = {
     let raw = null;
     try{ raw = JSON.parse(localStorage.getItem(PROGRESS_KEY) || 'null'); }catch(e){}
     const out = this.blank();
+    if(raw && raw.flags && typeof raw.flags === 'object') for(const k in raw.flags) out.flags[k] = !!raw.flags[k];
+    this.data = out;
     if(raw && raw.classes){
       CLASS_IDS.forEach(function(id){
         const c = raw.classes[id], o = out.classes[id];
@@ -162,7 +170,7 @@ const Progress = {
         o.xp = Math.max(0, Math.floor(+c.xp || 0));
         const lv = levelFromXp(o.xp).level;
         o.tree = sanitizeTree(id, c.tree, lv - 1);
-        o.skin = skinById(c.skin).lvl <= lv ? skinById(c.skin).id : 'ash';
+        o.skin = skinOpen(skinById(c.skin), lv) ? skinById(c.skin).id : 'ash';
       });
     }
     this.data = out;
@@ -190,7 +198,7 @@ const Progress = {
     return true;
   },
   reset(cls){ this.of(cls).tree = {}; this.save(); },
-  skinUnlocked(cls, id){ return skinById(id).id === id && skinById(id).lvl <= this.level(cls); },
+  skinUnlocked(cls, id){ return skinById(id).id === id && skinOpen(skinById(id), this.level(cls)); },
   setSkin(cls, id){
     if(!this.skinUnlocked(cls, id)) return false;
     this.of(cls).skin = id;
