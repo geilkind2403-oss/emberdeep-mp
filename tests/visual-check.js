@@ -116,6 +116,25 @@
     const arenaRun=cls=>{game.cls=cls||'keeper';game.startRun();game.floor=9;game.P=null;game.nextFloor();return game.warden;};
     const toPhase=(V,ph)=>{const B=V.brain;game.P.y=1300;B.encounterStart(game.P);B.seq=[];B.seqDone=null;game.clearTalk();V.boxOn=true;B.beginPhase(ph);return B;};
     const until=(cond,max,each)=>{for(let i=0;i<(max||6000)&&game.state==='playing';i++){if(each)each();game.update(1/60);if(cond())return true;}return false;};
+    // Wickhollow: the village hub, the smithy and the new gear.
+    {const saveP=Progress.save;Progress.save=function(){};const pd=JSON.stringify(Progress.data);
+     game.cls='keeper';game.enterHub();const HW=game.world;
+     const doorsFree=HUB.houses.every(H=>!inAnyObstacle(HW.obstacles,H.door.x,H.door.y,14))&&!inAnyObstacle(HW.obstacles,HW.spawn.x,HW.spawn.y,20);
+     check('Wickhollow is a peaceful hub with reachable doors',HW.hub&&game.state==='playing'&&doorsFree&&HW.trees.length>100&&HUB.houses.length===4);
+     const oil0=game.P.oil;for(let i=0;i<120;i++)game.update(1/60);
+     game.P.invulnT=0;game.damagePlayer(9999,null,game.P);
+     check('No oil drain or death in the village',game.P.oil>=oil0-0.01&&game.state==='playing'&&game.P.hp===game.P.maxHp);
+     Progress.data.purse=1000;Progress.data.gear=sanitizeGear(null);
+     const okBuy=Progress.buyGear('bow',GEAR.bow.tiers[0].price)&&Progress.buyGear('bombs',GEAR.bombs.tiers[0].price)&&Progress.buyGear('heart',GEAR.heart.tiers[0].price);
+     const purseLeft=Progress.purse();game.backToHub();
+     check('The smithy sells gear for embers and it reaches the keeper',okBuy&&purseLeft===1000-60-90-80&&game.P.gear.bow===1&&game.P.maxHp===CLASSES.keeper.hp+15&&!Progress.buyGear('bow',99999));
+     game.P.x=1700;game.P.y=960;const sh=game.spawnEnemy('shade',1800,960);game.P.bowCdT=0;game.P.bombCdT=0;
+     Gear.act(game,game.P,{bow:true,bomb:true,tx:1800,ty:960},0.016);const nb=game.shots.filter(x=>x.kind==='bolt').length,nm=game.shots.filter(x=>x.kind==='bomb').length;
+     for(let i=0;i<90;i++){game.P.aim=0;game.update(1/60);}
+     check('Bow arrows and ember bombs hurt shadows',nb===1&&nm===1&&(sh.dead||sh.hp<sh.maxHp));
+     game.P.x=HUB.cave.x;game.P.y=HUB.cave.y+10;game.update(1/60);
+     check('The cave in the north starts the descent with the gear',game.floor===1&&!game.world.hub&&game.P.gear.bombs===1);
+     Progress.data=JSON.parse(pd);Progress.save=saveP;}
     const ga=JSON.stringify(generateFloor(10,new Rng(77))),gb=JSON.stringify(generateFloor(10,new Rng(77))),A10=generateFloor(10,new Rng(77));
     check('Warden arena is deterministic and complete',ga===gb&&A10.arena&&A10.obstacles.filter(o=>o.dyn).length===8&&A10.vents.length===5&&A10.arena.candles.length===16&&A10.initial===0&&A10.spawn.y>A10.arena.corridor.y&&!generateFloor(20,new Rng(77)).arena);
     const pt={x:900,y:100};arenaClamp(A10,pt,13);const pc={x:900,y:2000};arenaClamp(A10,pc,13);const okCorr=pc.y===2000;A10.arena.sealed=true;arenaClamp(A10,pc,13);

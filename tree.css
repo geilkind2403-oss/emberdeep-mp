@@ -42,3 +42,7 @@
 .ability.ult .pipfill{background:linear-gradient(0deg,#ffc95b55,#ffe39b14)}
 .ability.ult .pip.ready{border-color:#ffe39b;box-shadow:0 0 28px #ffd36b66,inset 0 0 18px #ffd36b33;animation:breathe 1.2s infinite}
 @media(max-width:760px){.tree-col{flex-basis:100%}.tree-tab{font-size:9px;padding:7px 9px}#screen-tree{padding-top:70px}}
+
+.shop-card .price{margin-top:10px;font-weight:700;letter-spacing:.12em;color:#ffd98a}
+.shop-card.locked{opacity:.55}
+.shop-card.locked .price{color:#b9a98a}
