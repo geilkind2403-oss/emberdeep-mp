@@ -404,7 +404,7 @@ Coop.prototype.sendInput = function(){
     mx: live ? (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) : 0,
     my: live ? (k.KeyS ? 1 : 0) - (k.KeyW ? 1 : 0) : 0,
     a: Math.round(P.aim * 100) / 100, f: live && P.flameOn ? 1 : 0, s: surge ? 1 : 0,
-    dt: Math.round(P.dashT * 100) / 100 });
+    dt: Math.round(P.dashT * 100) / 100, lv: g.state === 'playing' ? 1 : 0 });
 };
 Coop.prototype.onMessage = function(msg, from){
   if(this.isHost){
@@ -434,8 +434,13 @@ Coop.prototype.onMessage = function(msg, from){
   }
   else if(msg.t === 'say') g.toast(msg.msg || '');
   else if(msg.t === 'talk'){
-    if(msg.clear) g.clearTalk();
-    else g.talk(String(msg.s || ''), Object.assign({}, msg.o || { v: msg.v }, { local: true }));
+    if(msg.clear && msg.all) g.clearTalk();
+    else if(msg.clear) g.dropHostTalk(0);
+    else {
+      const o = Object.assign({}, msg.o || { v: msg.v }, { local: true });
+      if(!o.own) o.host = 1;
+      g.talk(String(msg.s || ''), o);
+    }
   }
 
   else if(msg.t === 'fx' && msg.k === 'beam'){

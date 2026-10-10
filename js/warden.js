@@ -261,6 +261,8 @@ WBUILD[WK.RING] = function(d, o){
     if(q[9]) o.h.push({ ty: 'wedge', tw: ts - 0.7, te: ts + 0.25, x: d.x, y: d.y, a: gc, half: half });
   }
   if(q[11]) o.h.push({ ty: 'swell', tw: Math.max(0, q[11] - 1.5), te: q[11], x: d.x, y: d.y });
+  // A ring without a gap can only be surged or dashed: say so when it is close.
+  if(!q[3]) o.h.push({ ty: 'prompt', tw: q[11], te: q[11] + (d.R + 20 - q[10]) / sp, ts: q[11], x: d.x, y: d.y, r0: q[10], v: sp });
 };
 WBUILD[WK.WALLS] = function(d, o){
   // q: speed, thick, n, then (delay, angleDeg, col) per wall
@@ -382,7 +384,7 @@ WBUILD[WK.GONER] = function(d, o){
   const q = d.q, C = WARDEN.C;
   for(let j = 0; j < q[3]; j++){
     const ts = j * q[4] / q[3];
-    o.b.push({ ts: ts, te: ts + (q[0] - 60) / q[1], kt: Infinity, mo: 3, cx: C.x, cy: C.y, r0: q[0], vr: -q[1], a0: (d.a + j * 15) * DEG, w: 0, lw: q[2], r: 7, col: 0, f: 0 });
+    o.b.push({ ts: ts + 0.6, te: ts + 0.6 + (q[0] - 60) / q[1], kt: Infinity, tw: ts, mo: 3, cx: C.x, cy: C.y, r0: q[0], vr: -q[1], a0: (d.a + j * 15) * DEG, w: 0, lw: q[2], r: 7, col: 0, f: 0 });
   }
   o.h.push({ ty: 'pull', tw: 0, ts: 0, te: q[9], v: q[10] });
   const slotW = TAU / q[6], half = q[7] * slotW / 2, g = d.a * DEG;
@@ -451,6 +453,11 @@ class WardenView {
   addPattern(d){
     if(this.pats.has(d.id)) return;
     this.pats.set(d.id, { d: d, p: buildPattern(d) });
+    // Guests hear what the host's attack program played when it emitted this.
+    if(!this.brain){
+      const cue = { 1: 'bell', 4: 'bell', 5: 'lampCharge', 6: 'chainRattle', 10: 'bell', 11: 'slam', 12: 'inhale' }[d.k];
+      if(cue && SFX[cue]) SFX[cue](d.k === WK.BEAMS ? d.q[0] : d.k === WK.GONER ? 4 : undefined);
+    }
   }
   // Surge clears violet and white orbs it touches (only those).
   clearAt(x, y, r, local){
@@ -600,7 +607,8 @@ class WardenView {
   // ---- per frame (host and guests) ----
   update(dt){
     const G = this.G;
-    if(!this.brain) this.bt += dt;
+    const hold = !this.brain && G.coop && G.coop.hostState !== 'playing';
+    if(!this.brain && !hold) this.bt += dt;
     const bt = this.bt;
     this.pats.forEach((P, id) => {
       const u = bt - P.d.t0;
@@ -616,7 +624,7 @@ class WardenView {
     this.stateFx(dt);
     // Own keeper: hits are checked here, on the machine that knows the input.
     const P = G.P;
-    if(P){
+    if(P && !hold){
       const brain = this.brain;
       this.checkHits(P, !!P.moving, dt, (pid, idx, f) => {
         if(brain) brain.applyHit(P, f);
@@ -634,6 +642,8 @@ class WardenView {
         else if(this.s !== WS.FAKE && this.s !== WS.ENCOUNTER) Music.stop(1.2);
       }
       if(this.mu && WTRACKS[this.mu[0]] === 'corridor' && P) Music.setProximity(clamp((2300 - P.y) / 800, 0, 1));
+      Music.setTranspose(this.fl & 4 ? 1 : 0);
+      if(this.s === WS.KINDLE) Music.setLayers(this.so.filter(function(x){ return x[1] === 1; }).length);
       Music.duck(!!G.talkNow && G.talkNow.m !== 'bark');
     }
   }
@@ -680,6 +690,7 @@ class WardenView {
       if(!show && !fv.classList.contains('hidden')) fv.classList.add('hidden');
     }
     G.inputLock = this.s === WS.FAKE && u >= 2.0 && u < 7.6;
+    if(!this.brain && this.s === WS.FAKE && u >= 0.6 && this.fakeWinSb !== this.sb){ this.fakeWinSb = this.sb; SFX.win(); }
     const name = document.getElementById('bossCard');
     if(name){
       const on = this.s === WS.TALK && u < 2.2 && this.brain ? true : this.s === WS.TALK && u < 2.2;
@@ -695,25 +706,52 @@ class WardenView {
       box: [Math.round(this.box[0]), Math.round(this.box[1]), Math.round(this.box[2] * 1000) / 1000, this.box[3]], bo: this.boxOn ? 1 : 0,
       pm: this.A.pm, br: this.br, bp: this.bp.map(Math.round), dk: Math.round(this.A.dark * 100), cl: this.A.candlesLit,
       at: this.at, atT: r1(this.atT), fl: this.fl, nm: this.nm, mu: this.mu, en: this.en, sl: this.A.sealed ? 1 : 0, gg: r1(this.A.gateGlow),
-      pats: pats, clr: this.clr, so: this.so, ns: this.nSouls, mp: this.mp, mk: this.mk, hl: this.hpLock, pl: this.plate };
+      pats: pats, clr: this.clr, so: this.so, ns: this.nSouls, mp: this.mp, mk: this.mk, hl: this.hpLock, pl: this.plate,
+      sd: this.soulSeed || 0, nk: this.nKeepers || 1 };
   }
   apply(w){
     const G = this.G;
     const err = (w.bt + 0.04) - this.bt;
     if(Math.abs(err) > 0.3) this.bt = w.bt + 0.04;
     else this.bt += err * 0.15;
+    if(w.s >= WS.ENCOUNTER && this.s < WS.ENCOUNTER && !this.metCounted){
+      this.metCounted = true;
+      const m = WardenMemory.load(); m.met++; WardenMemory.save(m);
+    }
     this.s = w.s; this.sb = w.sb; this.ph = w.ph;
     this.box = w.box; this.boxOn = !!w.bo;
-    if(w.pm !== this.A.pm) applyPillarMask(this.W, w.pm);
+    if(w.sd) this.soulSeed = w.sd;
+    if(w.nk) this.nKeepers = w.nk;
+    if(w.pm !== this.A.pm){
+      const gone = this.A.pm & ~w.pm;
+      W_PILLARS.forEach((r, k) => { if((gone >> k) & 1) G.burst(r.x + 24, r.y + 24, '#6d827c', 1.4, 18, 6, 0.9); });
+      if(gone){ G.shake += 6; if(SFX.slam) SFX.slam(); }
+      applyPillarMask(this.W, w.pm);
+    }
+    this.A.braziers.forEach((b, i) => { if(!b.lit && w.br[i] && this.fightActive()) G.burst(b.x, b.y, '#ffb35c', 1.2, 20, 5, 0.8); });
     this.br = w.br; this.bp = w.bp;
     this.A.braziers.forEach((b, i) => { b.lit = !!w.br[i]; b.prog = (w.bp[i] || 0) / 100; });
     this.A.dark = w.dk / 100; this.A.candlesLit = w.cl; this.A.sealed = !!w.sl; this.A.gateGlow = w.gg;
     if(w.at !== this.at || w.atT !== this.atT){ this.at = w.at; this.atT = w.atT; }
     this.fl = w.fl; this.nm = w.nm; this.mu = w.mu; this.en = w.en || '';
-    this.so = w.so || []; this.nSouls = w.ns || 0; this.mp = w.mp || []; this.mk = w.mk || 0; this.hpLock = w.hl || 0; this.plate = w.pl || null;
+    const so = w.so || [];
+    so.forEach((s, i) => {
+      if(s[1] === 1 && this.so[i] && this.so[i][1] !== 1){
+        const pos = this.soulPos(i, { x: 0, y: 0 });
+        G.burst(pos.x, pos.y, '#ffe39b', 1.4, 24, 5, 0.9);
+        if(SFX.kindle) SFX.kindle();
+      }
+    });
+    this.so = so; this.nSouls = w.ns || 0; this.mp = w.mp || []; this.mk = w.mk || 0; this.hpLock = w.hl || 0; this.plate = w.pl || null;
     const keep = new Set();
     (w.pats || []).forEach(a => { keep.add(a[0]); this.addPattern(descFromArr(a)); });
+    this.pats.forEach((P, id) => { if(!keep.has(id)) this.pats.delete(id); });
     (w.clr || []).forEach(c => this.applyClear(c));
+    if(w.en && !G.wardenEnding){
+      // The host banks these in endFight(); a guest finishing the same fight gets the same.
+      G.xpBonus += 250;
+      const m = WardenMemory.load(); m[w.en] = (m[w.en] || 0) + 1; m.last = w.en; WardenMemory.save(m);
+    }
     if(w.en) G.wardenEnding = w.en;
   }
   // ---- HUD (boss bar, objective) ----
@@ -870,8 +908,8 @@ class WardenBrain {
     return mu[1] + Math.ceil((t - mu[1]) / beat - 1e-6) * beat;
   }
   music(id){
-    const idx = WTRACKS.indexOf(id);
-    if(idx < 0){ this.V.mu = null; if(window.Music) Music.stop(1); return; }
+    const idx = id ? WTRACKS.indexOf(id) : -1;
+    if(idx <= 0){ this.V.mu = null; if(window.Music) Music.stop(1); return; }
     const beat = 60 / WBPM[id];
     this.V.mu = [idx, Math.ceil((this.bt + 0.3) / beat) * beat];
   }
@@ -903,19 +941,23 @@ class WardenBrain {
     k.owT = WARDEN.hitGap;
   }
   onGuestHit(mate, pid, idx){
-    if(!mate || mate.alive === false || mate.owT > 0 || this.V.calm()) return;
+    if(!mate || mate.alive === false || mate.owT > 0 || this.V.calm() || this.G.state !== 'playing') return;
     const fi = this.V.itemActive(pid, idx);
     if(fi < 0) return;
+    const key = pid + ':' + (idx >= 0 ? idx : 'h' + (-1 - idx));
+    mate._wHit = mate._wHit || new Set();
+    if(mate._wHit.has(key)) return;
+    mate._wHit.add(key);
     this.applyHit(mate, fi);
   }
   // ---- damage to the Warden ----
   onHurt(dmg, src, by){
     const s = this.V.s;
     if(s === WS.MERCY){
-      if(!by || src === 'aura' || src === 'dot' || src === 'thorns' || !(this.V.fl & 64)) return 0;
+      if(!by || src === 'aura' || src === 'dot' || src === 'thorns' || src === 'zone' || !(this.V.fl & 64)) return 0;
       const id = by.id || 'me', now = this.bt;
       const st = this.strike[id] || (this.strike[id] = { v: 0, last: -9 });
-      if(src === 'flame' || src === 'zone') st.v += 1.5 * Math.min(0.1, dmg / Math.max(1, (by.flame && by.flame.dps) || 60));
+      if(src === 'flame') st.v += 1.5 * Math.min(0.1, dmg / Math.max(1, (by.flame && by.flame.dps) || 60));
       else if(now - st.last > 0.2){ st.v += 0.5; st.last = now; }
       if(st.v >= 0.3 && !this.askSaid){ this.askSaid = true; this.bark('m.ask'); }
       return 0;
@@ -940,7 +982,7 @@ class WardenBrain {
   narrTo(p, id){
     const L = this.line(id), G = this.G;
     if(p === G.P) G.talk(L.text, { m: 'narr', local: true });
-    else if(G.coop) G.coop.net.sendTo(p.id, { t: 'talk', s: L.text, o: { m: 'narr' } });
+    else if(G.coop) G.coop.net.sendTo(p.id, { t: 'talk', s: L.text, o: { m: 'narr', own: 1, sfx: id === 'p4.refused' ? 'refuse' : id === 'd.candle' ? 'kindle' : '' } });
   }
   onKeeperDown(p){
     const s = this.V.s;
@@ -956,6 +998,7 @@ class WardenBrain {
     return false;
   }
   onTeamWipe(){
+    if(this.V.s === WS.RESOLVE) return true; // everyone is about to stand up again
     if(!this.V.fightActive() || this.resolveUsed) return false;
     this.resolve();
     return true;
@@ -985,7 +1028,6 @@ class WardenBrain {
     e.flash = Math.max(0, e.flash - dt);
     this.curR = Math.min(V.boxR(), WARDEN.openR);
     V.hpLock = e.hpFloor > 1 && e.hp <= e.hpFloor + 0.5 ? 1 : 0;
-    this.v = 100;
     this.candle();
     this.braziers(dt);
     if(this.seq.length || this.seqDone) this.runSeq(dt);
@@ -1005,7 +1047,7 @@ class WardenBrain {
     if(G.coop){
       G.coopMates().forEach(m => {
         const inp = G.coop.inputs[m.id];
-        if(!inp || performance.now() - inp.at > 500) V.checkHits(m, false, dt, (pid, idx, f) => this.applyHit(m, f));
+        if(!inp || performance.now() - inp.at > 1000 || !inp.lv) V.checkHits(m, !!m.moving && !!inp && performance.now() - inp.at < 1000, dt, (pid, idx, f) => this.applyHit(m, f));
         else m.owT = Math.max(0, (m.owT || 0) - dt);
       });
     }
@@ -1082,7 +1124,7 @@ class WardenBrain {
     WardenMemory.save(this.mem);
     this.setState(WS.ENCOUNTER);
     G.clearTalk();
-    if(G.coop) G.coop.net.broadcast({ t: 'talk', clear: 1 });
+    if(G.coop) G.coop.net.broadcast({ t: 'talk', clear: 1, all: 1 });
     this.music('');
     const ks = this.keepers();
     ks.forEach((k, i) => {
@@ -1198,7 +1240,6 @@ class WardenBrain {
     if(this.undying || this.e.hp > this.e.maxHp * 0.15) return;
     this.undying = true;
     this.V.fl |= 4;
-    if(window.Music) Music.setTranspose(1);
     this.bark('p3.undying');
   }
   openingStart(){
@@ -1356,7 +1397,7 @@ class WardenBrain {
     if(this.kindleT > 75){
       this.helpT -= dt;
       const next = V.so.findIndex(x => x[1] !== 1);
-      if(this.helpT <= 0 && next >= 0){ this.helpT = 1; V.so[next][0] = 100; }
+      if(this.helpT <= 0 && next >= 0){ this.helpT = 1.5; V.soulPos(next, pos); this.kindleSoul(next, pos); }
     }
     V.so.forEach((s, i) => {
       if(s[1] === 1) return;
@@ -1397,7 +1438,6 @@ class WardenBrain {
       G.talk((k ? k.name || 'Keeper' : 'Keeper') + ' · "Not yet."', { m: 'soul' });
     } else G.talk(WSOULS[i % WSOULS.length], { m: 'soul' });
     const lit = V.so.filter(x => x[1] === 1).length;
-    if(window.Music) Music.setLayers(lit);
     V.fl = (V.fl & ~0xff00) | (Math.min(255, lit) << 8);
   }
   startP4(name){
@@ -1506,6 +1546,9 @@ class WardenBrain {
     this.resolvePrev = V.s === WS.RESOLVE ? this.resolvePrev : V.s;
     this.clearPatterns();
     this.prog = null; this.pendingP4 = null;
+    const A = G.world.arena;
+    if(this.darkUntil > this.bt || A.dark > 0.9 && V.ph === 2){ A.dark = this.prevDark || 0.8; }
+    this.darkUntil = 0;
     this.setState(WS.RESOLVE);
     this.music('');
     this.say('r.1', 'narr');
@@ -1529,7 +1572,7 @@ class WardenBrain {
       return;
     }
     e.hp = ph === 1 ? e.maxHp : Math.round(e.maxHp * WARDEN.gate[ph - 2]);
-    if(ph === 3){ this.undying = false; this.tollDone = false; V.fl &= ~4; if(window.Music) Music.setTranspose(0); }
+    if(ph === 3){ this.undying = false; this.tollDone = false; V.fl &= ~4; }
     this.beginPhase(ph);
   }
 }
@@ -1553,8 +1596,8 @@ const WARDEN_ATTACKS = {
     const q = [220, 26, 3, 0.8, 90 + rot, 1, 2.4, 0 + rot, 1, 4.0, 45 + rot, 1];
     this.emit(WK.WALLS, start, C.x, C.y, 0, q);
     if(n >= 1) this.emit(WK.KEYS, start, C.x, C.y, 90 + rot, [10, 60]);
-    if(SFX.chime) SFX.chime();
-    return { end: start + 4.0 + 2 * (R + 20) / (220 * this.v / 100) + 0.3, steps: [] };
+    const wallEnd = start + 4.0 + 2 * (R + 20) / (220 * this.v / 100);
+    return { end: (n >= 1 ? Math.max(wallEnd, start + 0.8 + 2 * R / (60 * this.v / 100)) : wallEnd) + 0.3, steps: [] };
   },
   TRAIL(t0, R){
     this.bark('p1.proc');
@@ -2219,8 +2262,16 @@ WardenView.prototype.drawHazard = function(c, R, h, u, d, t){
     const f = (u - h.tw) / (h.te - h.tw);
     c.strokeStyle = hexA('#ffffff', 0.25 + 0.5 * f); c.lineWidth = 3 + 6 * f;
     c.beginPath(); c.arc(h.x, h.y, 50 + 30 * Math.sin(t * 12) * f, 0, TAU); c.stroke();
+    return;
+  }
+  if(h.ty === 'prompt'){
     const P = this.G.P;
-    if(P){ c.fillStyle = hexA('#ffffff', 0.5 + 0.5 * Math.sin(t * 14)); c.font = 'bold 12px "Courier New"'; c.textAlign = 'center'; c.fillText('SPACE', P.x, P.y - 34); }
+    if(!P || u < h.ts || u >= h.te) return;
+    const ring = h.r0 + h.v * (u - h.ts), gap = dist(P.x, P.y, h.x, h.y) - ring;
+    if(gap > 0 && gap < 0.6 * P.surge.r + 7){
+      c.fillStyle = hexA('#ffffff', 0.6 + 0.4 * Math.sin(t * 14)); c.font = 'bold 12px "Courier New"'; c.textAlign = 'center';
+      c.fillText(P.surgeCdT > 0 ? 'SHIFT' : 'SPACE', P.x, P.y - 34);
+    }
     return;
   }
   if(h.ty === 'pull'){

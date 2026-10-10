@@ -658,6 +658,7 @@ class Renderer {
       if(boss){h.bossName.textContent=boss.d.name;h.bossFill.style.width=clamp(boss.hp/boss.maxHp*100,0,100)+'%';h.bossSub.textContent='';h.bossAtk.textContent='';h.bossPips.textContent='';}
       const remaining=G.enemies.length+W.spawnsLeft;h.objective.textContent=W.gateOpen?'THE STAIR IS LIT · DESCEND':boss?'EXTINGUISH THE '+(boss.type==='warden'?'WARDEN':'WRAITH'):remaining+' SHADOWS REMAIN';
       if(h.oilLabel)h.oilLabel.textContent='◈ LANTERN OIL';
+      ['locked','open','veil','gold'].forEach(k=>h.bossWrap.classList.remove(k));h.scoreVal.parentElement.classList.remove('souls-pulse');
     }
     h.buffRow.textContent=Object.keys(P.buffs||{}).map(k=>buffDef(k).icon+' '+buffDef(k).name+' '+Math.ceil(P.buffs[k])).join('   ');
     h.darkWarn.classList.toggle('hidden',P.oil>5||P.hp<=0);h.hint.classList.toggle('off',G.t>12);

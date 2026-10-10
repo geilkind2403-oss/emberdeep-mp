@@ -197,6 +197,10 @@
     until(()=>V.bt-V.sb>2.6,300);
     const fv=document.getElementById('fakeVictory');
     check('The Warden falls... but the stair stays shut',V.s===WS.FAKE&&!game.world.gateOpen&&game.enemies.includes(B.e)&&game.state==='playing'&&!fv.classList.contains('hidden'));
+    game.pause();const pauseHeld=game.state==='playing'&&game._pauseQ===true;
+    until(()=>V.s!==WS.FAKE,2400);game.update(1/60);
+    const pausedAfter=game.state==='pause';game.resume();
+    check('A pause during the false ending waits until it is over',pauseHeld&&pausedAfter&&!game._pauseQ);
     until(()=>V.s===WS.KINDLE,2400);
     check('The fake victory screen shatters into the last phase',fv.classList.contains('hidden')&&V.s===WS.KINDLE&&V.so.length>=7);
     // Kindling: hold your light to a soul.

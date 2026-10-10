@@ -50,12 +50,15 @@ class Game {
     this._flameOn = false; SFX.flameOff();
   }
   pause(){
-    if(this.state !== 'playing' || this.warden && this.warden.s === WS.FAKE) return;
+    if(this.state !== 'playing') return;
+    // The false ending and the closing scene keep running; the pause waits for them.
+    if(this.warden && (this.warden.s === WS.FAKE || this.warden.s === WS.RESOLVE)){ this._pauseQ = true; return; }
+    this._pauseQ = false;
     this.state = 'pause';
     document.getElementById('pauseStats').textContent = 'FLOOR ' + this.floor + ' · SCORE ' + Math.round(this.score);
     this.showScreen('screen-pause');
   }
-  resume(){ this.state = 'playing'; this.stopInput(); this.showScreen(null); }
+  resume(){ this._pauseQ = false; this.state = 'playing'; this.stopInput(); this.showScreen(null); }
   cameraOrigin(){
     const W = this.world, R = this.R;
     return {
@@ -113,9 +116,27 @@ class Game {
       delete msg.local;
       this.coop.net.broadcast({ t: 'talk', s: text, o: msg });
     }
+    if(o.sfx && SFX[o.sfx]) SFX[o.sfx]();
     if(o.m === 'bark'){ if(this.warden) this.warden.bark(text, o.who); return; }
     if(o.m === 'soul'){ this.soulLine(text); return; }
-    this.talkQueue.push({ text: text, v: o.v === undefined ? 140 : o.v, f: o.f || '', m: o.m || 'box', sp: o.sp || 32, who: o.who || '' });
+    // A guest only ever trails the host's dialogue: a new host line retires the old ones.
+    if(o.host) this.dropHostTalk(0.25);
+    this.talkQueue.push({ text: text, v: o.v === undefined ? 140 : o.v, f: o.f || '', m: o.m || 'box', sp: o.sp || 32, who: o.who || '', host: !!o.host });
+  }
+  // Retire mirrored host lines; the current one finishes within `grace` seconds.
+  dropHostTalk(grace){
+    this.talkQueue = this.talkQueue.filter(function(q){ return !q.host; });
+    const T = this.talkNow;
+    if(!T || !T.host) return;
+    if(grace > 0 && T.toks){
+      T.shown = T.toks.length;
+      this.renderTalk(T);
+      T.hold = Math.max(T.hold, 0.9 + T.n * 0.02 - grace);
+      return;
+    }
+    this.talkNow = null;
+    const el = document.getElementById('talk');
+    if(el && !this.talkQueue.length) el.classList.add('hidden');
   }
   talking(){ return !!this.talkNow || this.talkQueue.length > 0; }
   // Enter or Z: show the whole line, then move on. In co-op only the host
@@ -468,6 +489,7 @@ class Game {
     this.resetRunXp();
     this.runKills = 0;
     this.wardenEnding = null;
+    this._pauseQ = false;
     this.runSeed = this.coop ? this.coop.onRunStart() : (Date.now() >>> 0);
     this.nextFloor();
   }
@@ -704,9 +726,10 @@ class Game {
     this._trailClock = 0;
     this.P = this.P || this.makePlayer(this.cls);
     if(this.coop && !guest) this.coop.syncMates();
+    if(this.warden) this.leaveWarden();
     this.warden = W.arena ? new WardenView(this) : null;
-    this.inputLock = false;
     if(!W.arena && window.Music) Music.stop(1);
+    this.inputLock = false;
     const keepers = this.allPlayers();
     keepers.forEach((p, i) => {
       p.candleUsed = false; p.refused = false; p._wHit = null; p._wViol = null; p.owT = 0; p.lowered = false;
@@ -968,6 +991,7 @@ class Game {
     const lb = document.getElementById('letterbox'), fv = document.getElementById('fakeVictory');
     if(lb) lb.classList.remove('on');
     if(fv) fv.classList.add('hidden');
+    ['fade', 'bossCard'].forEach(function(id){ const el = document.getElementById(id); if(el) el.classList.remove('on'); });
     document.body.classList.remove('warden-scene');
     document.title = 'EMBERDEEP — A Descent in the Dark';
   }
@@ -1254,7 +1278,7 @@ class Game {
   actKeeper(p, inp, dt){
     const local = p === this.P, V = this.warden;
     if(V && V.locksActions()) inp = Object.assign({}, inp, { fire: false, surge: false, ability: false, alt: false, ult: false });
-    else if(V && V.blocksUlt()) inp = Object.assign({}, inp, { ult: false });
+    else if(V && V.blocksUlt()) inp = Object.assign({}, inp, { ult: false, ability: V.s === WS.MERCY ? false : inp.ability });
     const calm = V && V.calm();
     p.aim = inp.aim;
     p.surgeT = Math.max(0, p.surgeT - dt);
@@ -1641,6 +1665,10 @@ class Game {
     this.t += dt;
     this.updateTalk(dt);
     if(this.isGuest()){ this.updateGuest(dt); return; }
+    if(this._pauseQ && !(this.warden && (this.warden.s === WS.FAKE || this.warden.s === WS.RESOLVE))){
+      this.pause();
+      if(this.state !== 'playing') return;
+    }
     const W = this.world, P = this.P;
     if(!W || !P || P.hp <= 0 && !this.coop) return;
 
