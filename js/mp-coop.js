@@ -15,7 +15,7 @@
    guest->host: in {x, y, tp, mx, my, a, f, s, dt, e, r, q, cx, cy} | pick {id}
    Skill trees and skins travel with the lobby (mp-net.js); the host builds each
    guest's keeper from them and runs their attacks and ultimates. */
-var COOP_SHOT_KINDS = ['orb', 'shard', 'fire', 'bolt'];
+var COOP_SHOT_KINDS = ['orb', 'shard', 'fire', 'bolt', 'bomb'];
 var COOP_ZONE_KINDS = ['flare', 'pool', 'mend', 'mote', 'meteor', 'sanct'];
 
 var COOP_SNAP_MS = 66;      // ~15 snapshots per second
@@ -219,7 +219,7 @@ Coop.prototype.syncMates = function(){
     seen[p.id] = true;
     let m = self.mates.get(p.id);
     if(!m){
-      m = g.makePlayer(p.cls, p.tree || {}, p.skin);
+      m = g.makePlayer(p.cls, p.tree || {}, p.skin, {});
       m.id = p.id;
       self.mates.set(p.id, m);
     }
@@ -337,7 +337,7 @@ Coop.prototype.inputFor = function(m){
   const placed = inp.tp === m.tp;
   return { mx: live ? inp.mx : 0, my: live ? inp.my : 0, aim: inp.a,
     fire: live && !!inp.f, surge: live && !!inp.s, dashT: live ? inp.dt : 0,
-    ability: live && !!inp.e, alt: live && !!inp.r, ult: live && !!inp.q, tx: inp.cx, ty: inp.cy,
+    ability: live && !!inp.e, alt: live && !!inp.r, ult: live && !!inp.q, bow: live && !!inp.b, bomb: live && !!inp.g, tx: inp.cx, ty: inp.cy,
     x: placed ? inp.x : undefined, y: placed ? inp.y : undefined };
 };
 Coop.prototype.snapshot = function(){
@@ -404,11 +404,16 @@ Coop.prototype.sendInput = function(){
     mx: live ? (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0) : 0,
     my: live ? (k.KeyS ? 1 : 0) - (k.KeyW ? 1 : 0) : 0,
     a: Math.round(P.aim * 100) / 100, f: live && P.flameOn ? 1 : 0, s: surge ? 1 : 0,
-    dt: Math.round(P.dashT * 100) / 100, lv: g.state === 'playing' ? 1 : 0 });
+    dt: Math.round(P.dashT * 100) / 100, lv: g.state === 'playing' ? 1 : 0,
+    b: live && k.KeyR ? 1 : 0, g: live && k.KeyG ? 1 : 0, gr: [Progress.gearOf('bow'), Progress.gearOf('bombs')] });
 };
 Coop.prototype.onMessage = function(msg, from){
   if(this.isHost){
-    if(msg.t === 'in'){ msg.at = performance.now(); this.inputs[from] = msg; }
+    if(msg.t === 'in'){
+      msg.at = performance.now(); this.inputs[from] = msg;
+      const m = this.mates.get(from);
+      if(m && msg.gr) m.gear = Object.assign(m.gear || {}, { bow: clamp(msg.gr[0] | 0, 0, gearMax('bow')), bombs: clamp(msg.gr[1] | 0, 0, gearMax('bombs')) });
+    }
     else if(msg.t === 'pick' && this.mates.has(from)) this.resolvePick(this.mates.get(from), msg.id);
     else if(msg.t === 'ow' && this.mates.has(from) && this.game.warden && this.game.warden.brain) this.game.warden.brain.onGuestHit(this.mates.get(from), msg.p, msg.i);
     return;

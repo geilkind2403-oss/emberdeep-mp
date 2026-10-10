@@ -6,7 +6,7 @@
    guest->host: {t:'hello', name, cls, tree, skin, v}   {t:'cls', cls, tree, skin}   {t:'bye'}   {t:'ping'}
    host->guest: {t:'lobby', players:[{id,name,color,cls,tree,skin}], code}   {t:'bye', reason}   {t:'ping'} */
 
-var MP_PROTOCOL = 6;
+var MP_PROTOCOL = 7;
 var MP_PREFIX = 'emberdeep-mp-v' + MP_PROTOCOL + '-';
 var MP_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 var MP_MAX_PLAYERS = 8;

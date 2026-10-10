@@ -153,7 +153,7 @@ function treeSpent(tree){
 const Progress = {
   data: null,
   blank(){
-    const d = { v: 1, classes: {}, flags: {} };
+    const d = { v: 1, classes: {}, flags: {}, purse: 0, gear: sanitizeGear(null) };
     CLASS_IDS.forEach(function(id){ d.classes[id] = { xp: 0, tree: {}, skin: 'ash' }; });
     return d;
   },
@@ -162,6 +162,7 @@ const Progress = {
     try{ raw = JSON.parse(localStorage.getItem(PROGRESS_KEY) || 'null'); }catch(e){}
     const out = this.blank();
     if(raw && raw.flags && typeof raw.flags === 'object') for(const k in raw.flags) out.flags[k] = !!raw.flags[k];
+    if(raw){ out.purse = Math.max(0, Math.floor(+raw.purse || 0)); out.gear = sanitizeGear(raw.gear); }
     this.data = out;
     if(raw && raw.classes){
       CLASS_IDS.forEach(function(id){
@@ -202,6 +203,16 @@ const Progress = {
   setSkin(cls, id){
     if(!this.skinUnlocked(cls, id)) return false;
     this.of(cls).skin = id;
+    this.save();
+    return true;
+  },
+  purse(){ if(!this.data) this.load(); return this.data.purse; },
+  addEmbers(n){ if(!this.data) this.load(); this.data.purse += Math.max(0, Math.round(n)); this.save(); },
+  gearOf(id){ if(!this.data) this.load(); return this.data.gear[id] || 0; },
+  buyGear(id, price){
+    if(this.purse() < price || this.gearOf(id) >= gearMax(id)) return false;
+    this.data.purse -= price;
+    this.data.gear[id] = this.gearOf(id) + 1;
     this.save();
     return true;
   },

@@ -221,7 +221,7 @@ class Game {
 
   initInput(){
     const kmap = {};
-    ['KeyW','KeyA','KeyS','KeyD','KeyE','KeyQ','KeyZ','Enter','Space','ShiftLeft','ShiftRight','KeyP','Escape'].forEach(function(code){ kmap[code] = true; });
+    ['KeyW','KeyA','KeyS','KeyD','KeyE','KeyQ','KeyZ','KeyR','KeyG','KeyF','Enter','Space','ShiftLeft','ShiftRight','KeyP','Escape'].forEach(function(code){ kmap[code] = true; });
     window.addEventListener('keydown', (e) => {
       if(!kmap[e.code] || e.target.tagName === 'INPUT') return;
       this.keys[e.code] = true;
@@ -264,19 +264,20 @@ class Game {
   initButtons(){
     const $ = function(id){ return document.getElementById(id); };
     const game = this;
-    $('btnStart').addEventListener('click', function(){ SFX.init(); SFX.start(); game.startRun(); });
+    $('btnStart').addEventListener('click', function(){ SFX.init(); SFX.start(); game.enterHub(); });
+    $('btnShopBack').addEventListener('click', function(){ SFX.click(); game.backToHub(); });
     $('btnRetry').addEventListener('click', function(){ SFX.click(); game.startRun(); });
-    $('btnOverTitle').addEventListener('click', function(){ SFX.click(); game.toTitle(); });
+    $('btnOverTitle').addEventListener('click', function(){ SFX.click(); if(game.coop) game.toTitle(); else game.enterHub(); });
     $('btnEndless').addEventListener('click', function(){ SFX.click(); game.endless(); });
-    $('btnVicTitle').addEventListener('click', function(){ SFX.click(); game.toTitle(); });
+    $('btnVicTitle').addEventListener('click', function(){ SFX.click(); if(game.coop) game.toTitle(); else game.enterHub(); });
     $('btnResume').addEventListener('click', function(){ SFX.click(); game.resume(); });
     $('btnPauseRestart').addEventListener('click', function(){ SFX.click(); game.startRun(); });
     $('btnPauseTitle').addEventListener('click', function(){ SFX.click(); game.toTitle(); });
     $('btnClass').addEventListener('click', function(){ SFX.click(); game.showClassPicker(); });
-    $('btnClassBack').addEventListener('click', function(){ SFX.click(); game.showScreen('screen-title'); });
+    $('btnClassBack').addEventListener('click', function(){ SFX.click(); game.menuBack(); });
     $('btnTree').addEventListener('click', function(){ SFX.click(); game.showTree(); });
     $('btnFakeOn').addEventListener('click', function(){ this.textContent = 'THERE IS NOWHERE LEFT TO DESCEND'; SFX.snuff(); });
-    $('btnTreeBack').addEventListener('click', function(){ SFX.click(); game.showScreen('screen-title'); });
+    $('btnTreeBack').addEventListener('click', function(){ SFX.click(); game.menuBack(); });
     $('btnTreeReset').addEventListener('click', function(){
       SFX.click();
       Progress.reset(game.cls);
@@ -295,7 +296,7 @@ class Game {
 
   showScreen(name){
     document.body.classList.toggle('in-game', name === null);
-    const ids = ['screen-title','screen-class','screen-tree','screen-upgrade','screen-over','screen-victory','screen-pause'];
+    const ids = ['screen-title','screen-class','screen-tree','screen-upgrade','screen-over','screen-victory','screen-pause','screen-shop'];
     for(let i = 0; i < ids.length; i++){
       document.getElementById(ids[i]).classList.toggle('hidden', ids[i] !== name);
     }
@@ -331,7 +332,7 @@ class Game {
       card.addEventListener('click', function(){
         SFX.click();
         game.setClass(id);
-        game.showScreen('screen-title');
+        game.menuBack();
       });
       wrap.appendChild(card);
     });
@@ -454,6 +455,7 @@ class Game {
     this.xpBonus = 0;
     this.xpBanked = 0;
     this.xpGained = 0;
+    this.embersBanked = 0;
     this.runCls = this.cls;
     this.runLevelFrom = Progress.level(this.cls);
     this.xpSync = !!sync; // co-op guest: the first snapshot sets the baseline
@@ -461,6 +463,8 @@ class Game {
   runXp(){ return Math.round(this.score) + XP_PER_FLOOR * this.floorsCleared + this.xpBonus; }
   bankXp(){
     if(this.xpSync || !this.runCls) return;
+    const eg = Math.round(this.embers) - (this.embersBanked || 0);
+    if(eg > 0){ this.embersBanked = (this.embersBanked || 0) + eg; Progress.addEmbers(eg); }
     const gain = this.runXp() - this.xpBanked;
     if(gain <= 0) return;
     this.xpBanked += gain;
@@ -495,7 +499,7 @@ class Game {
   }
 
   // `tree` and `skin` default to the local profile; co-op mates bring their own.
-  makePlayer(cls, tree, skin){
+  makePlayer(cls, tree, skin, gear){
     const W = this.world;
     const base = {
       x: W.spawn.x, y: W.spawn.y,
@@ -537,6 +541,9 @@ class Game {
     P.flame.range += C.flameRange;
     P.dash.cd = Math.max(0.6, P.dash.cd + C.dashCd);
     P.eCdT = 0;
+    P.gear = sanitizeGear(gear !== undefined ? gear : (Progress.of(P.cls), Progress.data.gear));
+    P.maxHp += 15 * P.gear.heart; P.maxOil += 15 * P.gear.flask;
+    P.bowCdT = P.bombCdT = 0;
     const own = Progress.of(P.cls);
     P.sk = sanitizeTree(P.cls, tree !== undefined ? tree : own.tree);
     P.skin = skinById(skin !== undefined ? skin : own.skin).id;
@@ -586,6 +593,11 @@ class Game {
   // Solo: the run ends. Co-op: the keeper falls and watches until the team slays
   // the next boss; the run ends once every keeper has fallen.
   keeperDown(p){
+    if(this.world && this.world.hub){
+      p.hp = p.maxHp; p.x = HUB.spawn.x; p.y = HUB.spawn.y; p.tp = (p.tp || 0) + 1; p.invulnT = 2;
+      this.toast('THE VILLAGE CARRIES YOU HOME');
+      return;
+    }
     if(this.warden && this.warden.brain && this.warden.brain.onKeeperDown(p)) return;
     p.hp = 0;
     if(!this.coop){ this.gameOver(); return; }
@@ -609,7 +621,7 @@ class Game {
       const levels = [], lost = [];
       for(const id in p.upg) for(let n = 0; n < p.upg[id]; n++) levels.push(id);
       for(let n = 0; n < 2 && levels.length; n++) lost.push(levels.splice((Math.random() * levels.length) | 0, 1)[0]);
-      const fresh = this.makePlayer(p.cls, p.sk, p.skin);
+      const fresh = this.makePlayer(p.cls, p.sk, p.skin, p.gear);
       ['id', 'name', 'color', 'tp'].forEach(function(k){ fresh[k] = p[k]; });
       Object.assign(p, fresh);
       levels.forEach(id => this.applyUpgrade(UPGRADES.find(function(u){ return u.id === id; }), p, true));
@@ -967,6 +979,38 @@ class Game {
     if(this.coop && this.coop.isHost) this.coop.onEnd('victory');
   }
 
+  // Wickhollow, the village above the deep: between runs, single keeper.
+  enterHub(){
+    if(this.coop){ this.startRun(); return; }
+    this.bankXp();
+    this.clearTalk();
+    this.leaveWarden();
+    this.stopInput(); this.t = 0; this.shake = 0;
+    this.floor = 0; this.score = 0; this.embers = 0;
+    this.resetRunXp();
+    this.runKills = 0;
+    this.rng = new Rng((Date.now() >>> 0) ^ 0x5eed);
+    this.world = generateHub();
+    this.warden = null;
+    this.enemies = []; this.shots = []; this.zones = []; this.particles = []; this.effects = []; this.trails = [];
+    this.P = this.makePlayer(this.cls);
+    this.cam = { x: this.P.x, y: this.P.y };
+    this.state = 'playing';
+    this.showScreen(null);
+    this.toast('WICKHOLLOW');
+  }
+  // Leaving a village menu: rebuild the keeper so class, tree and gear apply.
+  backToHub(){
+    const W = this.world, old = this.P;
+    if(!W || !W.hub){ this.showScreen('screen-title'); return; }
+    this.bankXp();
+    this.P = this.makePlayer(this.cls);
+    if(old){ this.P.x = old.x; this.P.y = old.y + 20; }
+    this.state = 'playing';
+    this.showScreen(null);
+  }
+  menuBack(){ if(this.state === 'hubmenu') this.backToHub(); else this.showScreen('screen-title'); }
+
   toTitle(){
     this.bankXp();
     this.clearTalk();
@@ -1083,6 +1127,7 @@ class Game {
 
   stepGate(){
     const W = this.world;
+    if(W.hub){ this.startRun(); return; }
     if(!W.gateOpen){
       W.gateOpen = true;
       SFX.gateOpen();
@@ -1183,6 +1228,7 @@ class Game {
   }
   // HUD hint for the vent next to the local keeper.
   fuelPrompt(P){
+    if(this.world.hub) return Hub.prompt(this);
     let msg = null;
     this.world.vents.forEach(function(v){
       const d = dist(P.x, P.y, v.x, v.y);
@@ -1209,6 +1255,8 @@ class Game {
       ability: !!k.KeyE,
       alt: !!this.mouse.alt,
       ult: !!k.KeyQ,
+      bow: !!k.KeyR,
+      bomb: !!k.KeyG,
       tx: this.mouse.x + origin.x,
       ty: this.mouse.y + origin.y
     };
@@ -1279,7 +1327,7 @@ class Game {
     const local = p === this.P, V = this.warden;
     if(V && V.locksActions()) inp = Object.assign({}, inp, { fire: false, surge: false, ability: false, alt: false, ult: false });
     else if(V && V.blocksUlt()) inp = Object.assign({}, inp, { ult: false, ability: V.s === WS.MERCY ? false : inp.ability });
-    const calm = V && V.calm();
+    const calm = V && V.calm() || this.world && this.world.hub;
     p.aim = inp.aim;
     p.surgeT = Math.max(0, p.surgeT - dt);
     p.surgeCdT = Math.max(0, p.surgeCdT - dt);
@@ -1298,6 +1346,7 @@ class Game {
     if(inp.alt && p.alt && p.altCdT <= 0) this.useAlt(p, inp);
     if(inp.ult && p.ultOn && p.ult >= 100) this.useUlt(p, inp);
     if(inp.surge && p.surgeCdT <= 0 && p.oil > 0) this.surge(p);
+    Gear.act(this, p, inp, dt);
 
     if(!freeOil && !calm) p.oil = Math.max(0, p.oil - CFG.drain * dt);
     p.flameOn = !!inp.fire && p.oil > 0;
@@ -1676,6 +1725,7 @@ class Game {
     this.followCamera(dt);
     const inp = this.localInput(), alive = P.alive !== false;
     if(alive) this.moveKeeper(P, inp, dt);
+    if(W.hub) Hub.update(this, dt);
     this.updateFuelVents(dt);
     if(alive) this.actKeeper(P, inp, dt);
     if(this.state !== 'playing') return;
@@ -1748,6 +1798,7 @@ class Game {
     for(let i = 0; i < this.shots.length; i++){
       const s = this.shots[i];
       if(s.dead) continue;
+      if(s.kind === 'bomb'){ Gear.tickBomb(this, s, dt); continue; }
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       s.life -= dt;
